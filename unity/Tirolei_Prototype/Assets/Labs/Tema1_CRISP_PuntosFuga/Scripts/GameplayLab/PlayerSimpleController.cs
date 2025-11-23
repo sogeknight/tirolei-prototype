@@ -1,4 +1,5 @@
 using UnityEngine;
+using System.Collections.Generic;
 
 [RequireComponent(typeof(Rigidbody2D))]
 [RequireComponent(typeof(Collider2D))]
@@ -19,7 +20,7 @@ public class PlayerSimpleController : MonoBehaviour
     public string groundTag = "Ground";
 
     [Range(0f, 1f)]
-    public float groundNormalThreshold = 0.8f;
+    public float groundNormalThreshold = 0.9f;
     // solo normales MUY hacia arriba cuentan como suelo
 
     [Header("Coyote Time / Jump Buffer")]
@@ -27,10 +28,10 @@ public class PlayerSimpleController : MonoBehaviour
     public float jumpBufferTime = 0.25f;  // margen desde que pulsas hasta que pisas suelo
 
     private Rigidbody2D rb;
-
-    // contactos de suelo
-    private int groundContacts = 0;
-    private bool isGrounded => groundContacts > 0;
+    
+    // En vez de un simple contador bruto, mapeamos los colliders que SON suelo ahora mismo
+    private readonly Dictionary<Collider2D, bool> groundedColliders = new Dictionary<Collider2D, bool>();
+    private bool isGrounded => groundedColliders.Count > 0;
 
     // timers internos
     private float coyoteTimer = 0f;
@@ -89,10 +90,8 @@ public class PlayerSimpleController : MonoBehaviour
         // SALTO:
         //  - tiene que haber buffer activo
         //  - tiene que quedar coyote
-        //  - y NO puedes ir hacia arriba (velY <= 0) para evitar bugs debajo de S2
         // --------------------
-        bool verticalOk = rb.linearVelocity.y <= 0.01f;
-        bool canJumpNow = (coyoteTimer > 0f) && verticalOk;
+        bool canJumpNow = (coyoteTimer > 0f);
         bool wantJump = (jumpBufferTimer > 0f) && canJumpNow;
 
         if (wantJump)
@@ -115,8 +114,7 @@ public class PlayerSimpleController : MonoBehaviour
         }
 
         // --------------------
-        // SALTO VARIABLE (min/max por duración de pulsación)
-        // si sueltas la tecla y aún estás subiendo, recortamos el salto
+        // SALTO VARIABLE
         // --------------------
         if (rb.linearVelocity.y > 0f && Input.GetKeyUp(jumpKey))
         {
@@ -129,50 +127,75 @@ public class PlayerSimpleController : MonoBehaviour
 
         if (DEBUG_MOVEMENT)
         {
-            Debug.Log($"DBG -> grounded={isGrounded}, contacts={groundContacts}, " +
+            Debug.Log($"DBG -> grounded={isGrounded}, " +
                       $"coyote={coyoteTimer:F3}, buffer={jumpBufferTimer:F3}, velY={rb.linearVelocity.y:F2}");
         }
     }
 
+    // ---------
+    // GROUND CHECK HELPERS
+    // ---------
+    private bool HasValidGroundContact(Collision2D collision)
+    {
+        foreach (var contact in collision.contacts)
+        {
+            // punto por debajo del centro del jugador (pies, no cabeza)
+            bool contactBelowPlayer = contact.point.y <= transform.position.y - 0.05f;
+            // normal claramente hacia arriba
+            bool normalUpEnough = contact.normal.y >= groundNormalThreshold;
+
+            if (contactBelowPlayer && normalUpEnough)
+                return true;
+        }
+
+        return false;
+    }
+
+    private void SetGroundedForCollider(Collider2D col, bool groundedNow)
+    {
+        bool wasGrounded = isGrounded;
+
+        if (groundedNow)
+        {
+            groundedColliders[col] = true;
+        }
+        else
+        {
+            groundedColliders.Remove(col);
+        }
+
+        if (DEBUG_MOVEMENT)
+            Debug.Log($"DBG -> collider {col.name} groundedNow={groundedNow}, totalGroundColliders={groundedColliders.Count}");
+
+        // Telemetría LAND solo al pasar de NO grounded a grounded
+        if (!wasGrounded && isGrounded && telemetry != null)
+        {
+            telemetry.LogEvent("LAND", transform.position);
+        }
+    }
+
+    // ---------
+    // COLISIONES
+    // ---------
     private void OnCollisionEnter2D(Collision2D collision)
     {
         if (!collision.collider.CompareTag(groundTag))
             return;
 
-        // Solo contamos como suelo si el contacto está POR DEBAJO del centro del jugador
-        // y la normal apunta claramente hacia arriba. Así evitamos techos/laterales.
-        bool hasGroundContact = false;
+        bool hasGroundContact = HasValidGroundContact(collision);
+        SetGroundedForCollider(collision.collider, hasGroundContact);
+    }
 
-        foreach (var contact in collision.contacts)
-        {
-            bool contactBelowPlayer = contact.point.y <= transform.position.y - 0.05f;
-            bool normalUpEnough = contact.normal.y >= groundNormalThreshold;
-
-            if (contactBelowPlayer && normalUpEnough)
-            {
-                hasGroundContact = true;
-                break;
-            }
-        }
-
-        if (!hasGroundContact)
-        {
-            if (DEBUG_MOVEMENT)
-                Debug.Log("DBG -> Collision con Ground pero sin contacto de suelo válido (techo/lateral).");
+    private void OnCollisionStay2D(Collision2D collision)
+    {
+        if (!collision.collider.CompareTag(groundTag))
             return;
-        }
 
-        bool wasGrounded = isGrounded;
-        groundContacts++;
-
-        if (DEBUG_MOVEMENT)
-            Debug.Log($"DBG -> OnCollisionEnter suelo, groundContacts={groundContacts}");
-
-        // Telemetría LAND solo al pasar de no grounded a grounded
-        if (!wasGrounded && isGrounded && telemetry != null)
-        {
-            telemetry.LogEvent("LAND", transform.position);
-        }
+        // Aquí es donde se arregla el bug:
+        // si antes estabas tocando la parte superior, pero ahora solo estás rozando el lateral,
+        // HasValidGroundContact() pasará a false y se quitará ese collider del "suelo".
+        bool hasGroundContact = HasValidGroundContact(collision);
+        SetGroundedForCollider(collision.collider, hasGroundContact);
     }
 
     private void OnCollisionExit2D(Collision2D collision)
@@ -180,10 +203,7 @@ public class PlayerSimpleController : MonoBehaviour
         if (!collision.collider.CompareTag(groundTag))
             return;
 
-        if (groundContacts > 0)
-            groundContacts--;
-
-        if (DEBUG_MOVEMENT)
-            Debug.Log($"DBG -> OnCollisionExit suelo, groundContacts={groundContacts}");
+        // al salir de la colisión, seguro que ya no es suelo
+        SetGroundedForCollider(collision.collider, false);
     }
 }

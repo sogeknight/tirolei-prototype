@@ -531,7 +531,7 @@ Transform:
   m_GameObject: {fileID: 1509973231}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: 41.7, y: 0.79, z: 0}
+  m_LocalPosition: {x: 42.16, y: 0.6, z: 0}
   m_LocalScale: {x: 9.768, y: 0.6934212, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -674,11 +674,11 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PlayerSimpleController
   moveSpeed: 5
-  jumpForce: 14
+  jumpForce: 13.6
   jumpCutMultiplier: 0.5
   jumpKey: 122
   groundTag: Ground
-  groundNormalThreshold: 0.178
+  groundNormalThreshold: 0.9
   coyoteTime: 0.1
   jumpBufferTime: 0.1
 --- !u!50 &1566654046
@@ -855,7 +855,7 @@ Transform:
   m_GameObject: {fileID: 1798092493}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: 27.2, y: -0.78, z: 0}
+  m_LocalPosition: {x: 27.45, y: -0.78, z: 0}
   m_LocalScale: {x: 9.768, y: 0.6934212, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
