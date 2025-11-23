@@ -1,34 +1,75 @@
 using UnityEngine;
 
+[RequireComponent(typeof(Camera))]
 public class FollowCamera2D : MonoBehaviour
 {
-    [Header("Target a seguir")]
+    [Header("Target")]
     public Transform target;
 
-    [Header("Offset")]
-    public float offsetX = 0f;
-    public float offsetY = 0f;
+    [Header("Dead Zone (world units)")]
+    [Tooltip("How far the player can move left from camera center before camera moves.")]
+    public float deadZoneLeft = 2f;
+
+    [Tooltip("How far the player can move right from camera center before camera moves.")]
+    public float deadZoneRight = 2f;
+
+    [Header("Vertical / Depth")]
+    [Tooltip("If 0, the current camera Y will be used on Start().")]
+    public float fixedY = 0f;
+
     public float offsetZ = -10f;
 
-    private float fixedY;
+    [Header("Camera Smoothing")]
+    [Tooltip("Time for the camera to reach the target X position.")]
+    public float smoothTimeX = 0.2f;
+
+    private float currentVelocityX;
 
     private void Start()
     {
-        // Guardamos la altura inicial de la cámara para no marear
-        fixedY = transform.position.y + offsetY;
+        if (target == null)
+        {
+            Debug.LogWarning("FollowCamera2D: target is not assigned.");
+            enabled = false;
+            return;
+        }
+
+        // Fijamos Y si no está definida
+        if (Mathf.Approximately(fixedY, 0f))
+        {
+            fixedY = transform.position.y;
+        }
     }
 
     private void LateUpdate()
     {
         if (target == null) return;
 
-        // Solo seguimos en X, Y se mantiene fija
-        float targetX = target.position.x + offsetX;
+        float camX = transform.position.x;
+        float playerX = target.position.x;
 
-        transform.position = new Vector3(
-            targetX,
-            fixedY,
-            offsetZ
+        float newCamX = camX;
+
+        // Si el jugador se va demasiado a la derecha del centro de la cámara
+        if (playerX > camX + deadZoneRight)
+        {
+            newCamX = playerX - deadZoneRight;
+        }
+        // Si el jugador se va demasiado a la izquierda del centro de la cámara
+        else if (playerX < camX - deadZoneLeft)
+        {
+            newCamX = playerX + deadZoneLeft;
+        }
+        // Si está dentro de la dead zone, newCamX = camX (no se mueve)
+
+        // Suavizamos el movimiento de X para evitar "PAM"
+        float smoothedX = Mathf.SmoothDamp(
+            camX,
+            newCamX,
+            ref currentVelocityX,
+            smoothTimeX
         );
+
+        transform.position = new Vector3(smoothedX, fixedY, offsetZ);
     }
 }
