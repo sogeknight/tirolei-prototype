@@ -20,13 +20,15 @@ public class PlayerRespawn : MonoBehaviour
     [Tooltip("Offset vertical para evitar reaparecer clavado en el suelo")]
     public float groundRespawnYOffset = 0.1f;
 
-    [Tooltip("Offset horizontal adicional (se suma al cálculo final)")]
-    public float groundRespawnXOffset = 0.8f;
-
     [Tooltip("Margen mínimo desde el borde de la plataforma")]
     public float platformEdgeMargin = 0.5f;
 
-    public float minGroundNormalY = 0.7f;  // normal claramente hacia arriba
+    // 0 = inicio de la plataforma (lado izquierdo), 1 = final (lado derecho)
+    [Range(0f, 1f)]
+    public float platformRespawnAnchor = 0.15f;
+
+    [Tooltip("Normal mínima para considerar que estamos ENCIMA del suelo")]
+    public float minGroundNormalY = 0.7f;
 
     private Rigidbody2D rb;
     private bool levelFinished = false;
@@ -40,8 +42,7 @@ public class PlayerRespawn : MonoBehaviour
     }
 
     /// <summary>
-    /// Llamado cuando entras en una nueva sección (S01, S02, S03, S04…).
-    /// Sigue existiendo POR SI los triggers están bien colocados.
+    /// Checkpoint manual (p.ej. S01, S02, S03, S04…).
     /// </summary>
     public void SetCheckpoint(Vector2 newPoint)
     {
@@ -53,50 +54,45 @@ public class PlayerRespawn : MonoBehaviour
 
     /// <summary>
     /// Actualiza el checkpoint automáticamente cuando estás pisando suelo válido.
-    /// Esto hace que el respawn vaya a la última plataforma en la que estabas,
-    /// aunque los SectionTrigger fallen.
+    /// Siempre reaparece en el "inicio" de la plataforma actual.
     /// </summary>
     private void OnCollisionStay2D(Collision2D collision)
     {
         if (!useAutoGroundCheckpoint) return;
 
+        // Solo reaccionar a suelo
         if (!collision.collider.CompareTag(groundTag))
             return;
 
         foreach (var contact in collision.contacts)
         {
+            // Normal suficientemente hacia arriba = estamos ENCIMA de la plataforma
             if (contact.normal.y >= minGroundNormalY)
             {
                 Collider2D groundCol = collision.collider;
                 Bounds b = groundCol.bounds;
 
-                Vector2 safe;
-
-                // 1) límites seguros dentro de la plataforma
+                // 1) límites seguros
                 float minX = b.min.x + platformEdgeMargin;
                 float maxX = b.max.x - platformEdgeMargin;
 
-                // 2) posición actual del jugador
-                float targetX = transform.position.x;
+                // 2) X de respawn fija para ESTA plataforma:
+                //    0 = casi principio, 0.5 = centro, 1 = casi final
+                float respawnX = Mathf.Lerp(minX, maxX, platformRespawnAnchor);
 
-                // 3) clamp para no reaparecer en el filo
-                targetX = Mathf.Clamp(targetX, minX, maxX);
-
-                // 4) offset global opcional
-                targetX += groundRespawnXOffset;
-
-                safe.x = targetX;
+                Vector2 safe;
+                safe.x = respawnX;
                 safe.y = b.max.y + groundRespawnYOffset;
 
                 currentRespawnPoint = safe;
 
                 // Debug opcional:
-                // Debug.Log($"[PlayerRespawn] AUTO -> {currentRespawnPoint} ({groundCol.name})");
+                // Debug.Log($"[PlayerRespawn] Auto checkpoint en {currentRespawnPoint} para {groundCol.name}");
 
                 break;
             }
         }
-    }   //  <<< ESTA LLAVE TE FALTABA
+    }
 
     /// <summary>
     /// Teletransporte al último punto seguro.
