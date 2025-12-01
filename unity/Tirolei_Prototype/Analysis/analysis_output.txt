@@ -1,0 +1,48 @@
+=== RATIO DE MUERTES POR SECCIÓN (%) ===
+section
+S00_START               NaN
+S01_EASY_ENTER          4.5
+S02_MID_ENTER          42.6
+S03_HARD_ENTER         63.3
+S04_SUPERHARD_ENTER     0.0
+dtype: float64
+
+=== DURACIONES POR SECCIÓN (s) ===
+                     mean  median  min   max
+section                                     
+S00_START             0.4     0.4  0.3   0.5
+S01_EASY_ENTER       13.9     2.5  1.7  52.0
+S02_MID_ENTER        25.0    27.3  2.6  54.3
+S03_HARD_ENTER       26.0    29.5  2.7  50.2
+S04_SUPERHARD_ENTER   1.4     1.4  1.4   1.4
+
+=== TOP HOTSPOTS DE MUERTE ===
+           section  posX_round  posY_round  count
+26  S03_HARD_ENTER        3810        -390      8
+13   S02_MID_ENTER        2310        -400      7
+27  S03_HARD_ENTER        3820        -400      5
+6    S02_MID_ENTER        2040        -400      4
+19  S03_HARD_ENTER        3520        -400      4
+14  S03_HARD_ENTER        1950        -400      3
+20  S03_HARD_ENTER        3530        -400      2
+12   S02_MID_ENTER        2290        -400      2
+3    S02_MID_ENTER         850        -400      1
+0   S01_EASY_ENTER         840        -400      1
+2    S02_MID_ENTER         680        -400      1
+1    S02_MID_ENTER         550        -400      1
+11   S02_MID_ENTER        2250        -400      1
+10   S02_MID_ENTER        2240        -400      1
+9    S02_MID_ENTER        2190        -400      1
+8    S02_MID_ENTER        2150        -390      1
+7    S02_MID_ENTER        2070        -400      1
+5    S02_MID_ENTER        1870        -400      1
+4    S02_MID_ENTER        1850        -400      1
+15  S03_HARD_ENTER        1960        -400      1
+18  S03_HARD_ENTER        2300        -400      1
+17  S03_HARD_ENTER        2220        -400      1
+16  S03_HARD_ENTER        2040        -400      1
+21  S03_HARD_ENTER        3590        -400      1
+23  S03_HARD_ENTER        3770        -400      1
+22  S03_HARD_ENTER        3690        -400      1
+25  S03_HARD_ENTER        3810        -400      1
+24  S03_HARD_ENTER        3800        -400      1
