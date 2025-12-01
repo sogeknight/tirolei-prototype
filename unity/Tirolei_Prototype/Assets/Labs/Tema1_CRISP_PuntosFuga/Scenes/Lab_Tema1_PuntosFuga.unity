@@ -1038,7 +1038,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PlayerSimpleController
   moveSpeed: 5
-  jumpForce: 13.45
+  jumpForce: 13.5
   jumpCutMultiplier: 0.3
   jumpKey: 122
   groundTag: Ground
@@ -1211,8 +1211,8 @@ MonoBehaviour:
   currentRespawnPoint: {x: 0, y: 0}
   useAutoGroundCheckpoint: 1
   groundRespawnYOffset: 0.1
-  groundRespawnXOffset: -3.3
   platformEdgeMargin: 0.5
+  platformRespawnAnchor: 0.15
   minGroundNormalY: 0.7
 --- !u!1 &1614949997
 GameObject:
