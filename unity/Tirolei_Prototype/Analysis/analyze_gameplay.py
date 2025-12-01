@@ -47,3 +47,18 @@ hotspots = (
 )
 
 print(hotspots.head(15))
+
+# === EXPORTAR RESULTADOS A ARCHIVOS ===
+
+# 1) Guardar resumen en TXT (para documentación)
+with open("Analysis/analysis_output.txt", "w", encoding="utf-8") as f:
+    f.write("=== RATIO DE MUERTES POR SECCIÓN (%) ===\n")
+    f.write(str(death_ratio) + "\n\n")
+    f.write("=== DURACIONES POR SECCIÓN (s) ===\n")
+    f.write(str(sec_stats) + "\n\n")
+    f.write("=== TOP HOTSPOTS DE MUERTE ===\n")
+    f.write(str(hotspots.head(30)) + "\n")
+
+# 2) Guardar hotspots completos en CSV (para reutilizar)
+hotspots.to_csv("Analysis/hotspots_full.csv", index=False)
+
