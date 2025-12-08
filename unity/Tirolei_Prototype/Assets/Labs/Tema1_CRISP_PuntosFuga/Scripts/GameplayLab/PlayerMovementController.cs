@@ -3,7 +3,7 @@ using System.Collections.Generic;
 
 [RequireComponent(typeof(Rigidbody2D))]
 [RequireComponent(typeof(Collider2D))]
-public class PlayerSimpleController : MonoBehaviour
+public class PlayerMovementController : MonoBehaviour
 {
     [Header("Movimiento")]
     public float moveSpeed = 5f;
@@ -27,8 +27,12 @@ public class PlayerSimpleController : MonoBehaviour
     public float coyoteTime = 0.1f;       // margen tras dejar el suelo
     public float jumpBufferTime = 0.25f;  // margen desde que pulsas hasta que pisas suelo
 
+    // Flag para que otros sistemas (dash, cinemáticas, etc.) puedan bloquear el movimiento
+    [HideInInspector]
+    public bool movementLocked = false;
+
     private Rigidbody2D rb;
-    
+
     // En vez de un simple contador bruto, mapeamos los colliders que SON suelo ahora mismo
     private readonly Dictionary<Collider2D, bool> groundedColliders = new Dictionary<Collider2D, bool>();
     private bool isGrounded => groundedColliders.Count > 0;
@@ -54,6 +58,14 @@ public class PlayerSimpleController : MonoBehaviour
 
     private void Update()
     {
+        // Si algún sistema externo bloquea movimiento, no aplicamos input
+        if (movementLocked)
+        {
+            if (DEBUG_MOVEMENT)
+                Debug.Log("DBG -> movementLocked, no aplico input");
+            return;
+        }
+
         // --------------------
         // MOVIMIENTO HORIZONTAL
         // --------------------
@@ -191,7 +203,6 @@ public class PlayerSimpleController : MonoBehaviour
         if (!collision.collider.CompareTag(groundTag))
             return;
 
-        // Aquí es donde se arregla el bug:
         // si antes estabas tocando la parte superior, pero ahora solo estás rozando el lateral,
         // HasValidGroundContact() pasará a false y se quitará ese collider del "suelo".
         bool hasGroundContact = HasValidGroundContact(collision);
@@ -207,6 +218,3 @@ public class PlayerSimpleController : MonoBehaviour
         SetGroundedForCollider(collision.collider, false);
     }
 }
-
-
-
