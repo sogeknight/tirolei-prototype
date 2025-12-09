@@ -370,4 +370,21 @@ public class PlayerBounceAttack : MonoBehaviour
         previewLine.positionCount = 0;
         previewLine.enabled = false;
     }
+
+
+    private void OnTriggerEnter2D(Collider2D other)
+    {
+        if (!isBouncing) return;
+
+        EnemySimple enemy = other.GetComponentInParent<EnemySimple>();
+        if (enemy != null)
+        {
+            Debug.Log("[BounceAttack] HIT ENEMY BY BOUNCE ATTACK -> TRAVERSE CONFIRMED");
+            enemy.TakeHit(20);
+            Debug.Log("[BounceAttack] Enemy took 20 damage from bounce attack");
+        }
+    }
+
+
+
 }
