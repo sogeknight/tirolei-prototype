@@ -202,35 +202,35 @@ public class PlayerMovementController : MonoBehaviour
         }
     }
 
-    // ---------
-    // COLISIONES
-    // ---------
-    private void OnCollisionEnter2D(Collision2D collision)
-    {
-        if (!collision.collider.CompareTag(groundTag))
-            return;
+        // ---------
+        // COLISIONES
+        // ---------
+        private void OnCollisionEnter2D(Collision2D collision)
+        {
+            if (!collision.collider.CompareTag(groundTag))
+                return;
 
-        bool hasGroundContact = HasValidGroundContact(collision);
-        SetGroundedForCollider(collision.collider, hasGroundContact);
+            bool hasGroundContact = HasValidGroundContact(collision);
+            SetGroundedForCollider(collision.collider, hasGroundContact);
+        }
+
+        private void OnCollisionStay2D(Collision2D collision)
+        {
+            if (!collision.collider.CompareTag(groundTag))
+                return;
+
+            // si antes estabas tocando la parte superior, pero ahora solo estás rozando el lateral,
+            // HasValidGroundContact() pasará a false y se quitará ese collider del "suelo".
+            bool hasGroundContact = HasValidGroundContact(collision);
+            SetGroundedForCollider(collision.collider, hasGroundContact);
+        }
+
+        private void OnCollisionExit2D(Collision2D collision)
+        {
+            if (!collision.collider.CompareTag(groundTag))
+                return;
+
+            // al salir de la colisión, seguro que ya no es suelo
+            SetGroundedForCollider(collision.collider, false);
+        }
     }
-
-    private void OnCollisionStay2D(Collision2D collision)
-    {
-        if (!collision.collider.CompareTag(groundTag))
-            return;
-
-        // si antes estabas tocando la parte superior, pero ahora solo estás rozando el lateral,
-        // HasValidGroundContact() pasará a false y se quitará ese collider del "suelo".
-        bool hasGroundContact = HasValidGroundContact(collision);
-        SetGroundedForCollider(collision.collider, hasGroundContact);
-    }
-
-    private void OnCollisionExit2D(Collision2D collision)
-    {
-        if (!collision.collider.CompareTag(groundTag))
-            return;
-
-        // al salir de la colisión, seguro que ya no es suelo
-        SetGroundedForCollider(collision.collider, false);
-    }
-}
