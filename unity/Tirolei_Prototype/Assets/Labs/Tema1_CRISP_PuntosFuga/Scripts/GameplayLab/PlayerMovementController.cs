@@ -14,7 +14,10 @@ public class PlayerMovementController : MonoBehaviour
     public float jumpCutMultiplier = 0.5f;  // cuánto se reduce el salto al soltar antes
 
     [Header("Input")]
-    public KeyCode jumpKey = KeyCode.Z;
+    public KeyCode jumpKey = KeyCode.Z;   // teclado
+    public string jumpButton = "Jump";    // mando (X en Play)
+    public string horizontalAxis = "Horizontal"; // eje de movimiento (stick izq)
+
 
     [Header("Ground Detection (por colisiones)")]
     public string groundTag = "Ground";
@@ -36,6 +39,7 @@ public class PlayerMovementController : MonoBehaviour
     // En vez de un simple contador bruto, mapeamos los colliders que SON suelo ahora mismo
     private readonly Dictionary<Collider2D, bool> groundedColliders = new Dictionary<Collider2D, bool>();
     private bool isGrounded => groundedColliders.Count > 0;
+    public bool IsGrounded => isGrounded;
 
     // timers internos
     private float coyoteTimer = 0f;
@@ -58,6 +62,16 @@ public class PlayerMovementController : MonoBehaviour
 
     private void Update()
     {
+
+
+        for (int i = 0; i < 20; i++)
+        {
+            if (Input.GetKeyDown((KeyCode)((int)KeyCode.JoystickButton0 + i)))
+            {
+                Debug.Log("BOTÓN PULSADO: JoystickButton" + i);
+            }
+        }
+
         // Si algún sistema externo bloquea movimiento, no aplicamos input
         if (movementLocked)
         {
@@ -70,9 +84,10 @@ public class PlayerMovementController : MonoBehaviour
         // MOVIMIENTO HORIZONTAL
         // --------------------
         Vector2 v = rb.linearVelocity;
-        float inputX = Input.GetAxisRaw("Horizontal");
+        float inputX = Input.GetAxisRaw(horizontalAxis);  // teclado + stick izq
         v.x = inputX * moveSpeed;
         rb.linearVelocity = v;
+
 
         // --------------------
         // COYOTE TIME
@@ -87,7 +102,10 @@ public class PlayerMovementController : MonoBehaviour
         // --------------------
         // JUMP BUFFER (solo GetKeyDown)
         // --------------------
-        if (Input.GetKeyDown(jumpKey))
+        // JUMP BUFFER (teclado o mando)
+        bool jumpPressed  = Input.GetKeyDown(jumpKey) || Input.GetKeyDown(KeyCode.JoystickButton0);
+
+        if (jumpPressed)
         {
             jumpBufferTimer = jumpBufferTime;
         }
@@ -95,6 +113,7 @@ public class PlayerMovementController : MonoBehaviour
         {
             jumpBufferTimer -= Time.deltaTime;
         }
+
 
         if (jumpBufferTimer < 0f) jumpBufferTimer = 0f;
 
@@ -128,7 +147,9 @@ public class PlayerMovementController : MonoBehaviour
         // --------------------
         // SALTO VARIABLE
         // --------------------
-        if (rb.linearVelocity.y > 0f && Input.GetKeyUp(jumpKey))
+        bool jumpReleased = Input.GetKeyUp(jumpKey)   || Input.GetKeyUp(KeyCode.JoystickButton0);
+
+        if (rb.linearVelocity.y > 0f && jumpReleased)
         {
             v = rb.linearVelocity;
             v.y *= jumpCutMultiplier;
@@ -137,11 +158,6 @@ public class PlayerMovementController : MonoBehaviour
             if (DEBUG_MOVEMENT) Debug.Log("DBG -> Jump cut aplicado");
         }
 
-        if (DEBUG_MOVEMENT)
-        {
-            Debug.Log($"DBG -> grounded={isGrounded}, " +
-                      $"coyote={coyoteTimer:F3}, buffer={jumpBufferTimer:F3}, velY={rb.linearVelocity.y:F2}");
-        }
     }
 
     // ---------
