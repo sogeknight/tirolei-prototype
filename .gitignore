@@ -36,3 +36,8 @@ ExportedObj/
 *.unitypackage
 *.unitypackage.meta
 *.app
+
+# Unity crash recovery
+unity/Tirolei_Prototype/Assets/_Recovery/
+unity/Tirolei_Prototype/Assets/_Recovery.meta
+
