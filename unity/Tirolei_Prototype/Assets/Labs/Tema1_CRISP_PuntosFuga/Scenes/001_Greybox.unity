@@ -3707,8 +3707,9 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::FlameSparkPickup
   windowDuration: 1.5
+  anchorPoint: {fileID: 0}
   destroyOnPickup: 1
-  respawnSeconds: 2
+  respawnSeconds: 1
 --- !u!4 &222586888
 Transform:
   m_ObjectHideFlags: 0
@@ -11450,8 +11451,9 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::FlameSparkPickup
   windowDuration: 1.5
+  anchorPoint: {fileID: 0}
   destroyOnPickup: 1
-  respawnSeconds: 2
+  respawnSeconds: 1
 --- !u!4 &440229456
 Transform:
   m_ObjectHideFlags: 0
@@ -24984,49 +24986,54 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::PlayerSparkBoost
   boostKey: 120
   boostPadKey: 332
-  aimDeadzone: 0.15
+  aimDeadzone: 0.25
   keepLastAimWhenNoInput: 1
   defaultWindowDuration: 1.2
   goodStart: 0.6
   perfectStart: 0.85
-  allowAirHold: 1
-  holdGravityMultiplier: 0.15
-  maxDownwardSpeedDuringHold: 0.5
-  lockPlayerMovementDuringSpark: 1
-  forceZeroHorizontalVelocity: 1
-  clampXDuringSpark: 1
+  anchorPlayerDuringSpark: 1
+  forceOwnRigidbodyState: 1
+  ignoreInputOnPickupFrame: 1
+  pickupInputBlockTime: 0.06
+  physicalBounceOnPickup: 0
+  bounceUpSpeed: 10
+  bounceNoAnchorTime: 0.1
   dashSpeed: 40
   dashDuration: 0.2112
   dashCollisionMask:
     serializedVersion: 2
     m_Bits: 4294967295
-  sparkPickupMask:
-    serializedVersion: 2
-    m_Bits: 0
   dashSkin: 0.01
-  snapToPickupCenter: 1
+  dashBouncesOnWalls: 1
+  dashMaxBounces: 6
+  pickupSweepExtra: 0.08
+  snapToPickupAnchorOnDash: 1
   goodMultiplier: 1.15
-  perfectMultiplier: 1.5
-  consumeSparkOnUse: 1
+  perfectMultiplier: 1.35
   continuousTiming: 0
-  ringRenderer: {fileID: 229871208}
-  ringStartScale: 1.35
-  ringEndScale: 0.1
-  ringEase: 1.4
-  compensateParentScale: 1
-  ringColorInactive: {r: 1, g: 1, b: 1, a: 0.25}
-  ringColorActive: {r: 1, g: 0.8, b: 0.2, a: 0.85}
-  ringColorGood: {r: 0.4, g: 0.9, b: 1, a: 0.95}
-  ringColorPerfect: {r: 1, g: 0.2, b: 0.2, a: 0.95}
+  consumeSparkOnUse: 0
   sparkPreviewLine: {fileID: 949400948}
   previewWidth: 0.06
+  previewSegments: 24
+  previewMaxBounces: 6
+  previewSortingLayer: Default
+  previewSortingOrder: 600
   previewColorMiss: {r: 1, g: 0.8, b: 0.2, a: 0.9}
   previewColorGood: {r: 0.4, g: 0.9, b: 1, a: 0.95}
   previewColorPerfect: {r: 1, g: 0.2, b: 0.2, a: 0.95}
-  fxSortingLayer: FX
-  previewSortingOrder: 600
-  ringSortingOrder: 610
+  sparkRingLine: {fileID: 0}
+  ringRadius: 0.6
+  ringSegments: 48
+  ringWidth: 0.06
+  ringSortingLayer: Default
+  ringSortingOrder: 9998
   debug: 1
+  debugAim: 1
+  debugRayLength: 2
+  debugLogEvery: 0.12
+  holdToAimPausesTimer: 1
+  dashOnReleaseWhenHoldToAim: 1
+  maxTotalHoldPauseTime: 0
 --- !u!4 &894027829 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 5904578930624412166, guid: 4a09d75bba0dc2b4bab8674c888a777a, type: 3}
@@ -38470,6 +38477,150 @@ TilemapCollider2D:
   m_MaximumTileChangeCount: 1000
   m_ExtrusionFactor: 0
   m_UseDelaunayMesh: 0
+--- !u!1 &1386469464
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1386469468}
+  - component: {fileID: 1386469467}
+  - component: {fileID: 1386469466}
+  - component: {fileID: 1386469465}
+  m_Layer: 0
+  m_Name: Spark_Basic (2)
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!58 &1386469465
+CircleCollider2D:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1386469464}
+  m_Enabled: 1
+  serializedVersion: 3
+  m_Density: 1
+  m_Material: {fileID: 0}
+  m_IncludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_ExcludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_LayerOverridePriority: 0
+  m_ForceSendLayers:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  m_ForceReceiveLayers:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  m_ContactCaptureLayers:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  m_CallbackLayers:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  m_IsTrigger: 1
+  m_UsedByEffector: 0
+  m_CompositeOperation: 0
+  m_CompositeOrder: 0
+  m_Offset: {x: 0, y: 0}
+  m_Radius: 0.50000006
+--- !u!212 &1386469466
+SpriteRenderer:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1386469464}
+  m_Enabled: 1
+  m_CastShadows: 0
+  m_ReceiveShadows: 0
+  m_DynamicOccludee: 1
+  m_StaticShadowCaster: 0
+  m_MotionVectors: 1
+  m_LightProbeUsage: 1
+  m_ReflectionProbeUsage: 1
+  m_RayTracingMode: 0
+  m_RayTraceProcedural: 0
+  m_RayTracingAccelStructBuildFlagsOverride: 0
+  m_RayTracingAccelStructBuildFlags: 1
+  m_SmallMeshCulling: 1
+  m_ForceMeshLod: -1
+  m_MeshLodSelectionBias: 0
+  m_RenderingLayerMask: 1
+  m_RendererPriority: 0
+  m_Materials:
+  - {fileID: 10754, guid: 0000000000000000f000000000000000, type: 0}
+  m_StaticBatchInfo:
+    firstSubMesh: 0
+    subMeshCount: 0
+  m_StaticBatchRoot: {fileID: 0}
+  m_ProbeAnchor: {fileID: 0}
+  m_LightProbeVolumeOverride: {fileID: 0}
+  m_ScaleInLightmap: 1
+  m_ReceiveGI: 1
+  m_PreserveUVs: 0
+  m_IgnoreNormalsForChartDetection: 0
+  m_ImportantGI: 0
+  m_StitchLightmapSeams: 1
+  m_SelectedEditorRenderState: 0
+  m_MinimumChartSize: 4
+  m_AutoUVMaxDistance: 0.5
+  m_AutoUVMaxAngle: 89
+  m_LightmapParameters: {fileID: 0}
+  m_GlobalIlluminationMeshLod: 0
+  m_SortingLayerID: 0
+  m_SortingLayer: 0
+  m_SortingOrder: 0
+  m_Sprite: {fileID: 21300000, guid: fb11eb2dce648174daf13f6df6ad468c, type: 3}
+  m_Color: {r: 1, g: 0.8431373, b: 0, a: 1}
+  m_FlipX: 0
+  m_FlipY: 0
+  m_DrawMode: 0
+  m_Size: {x: 1, y: 1}
+  m_AdaptiveModeThreshold: 0.5
+  m_SpriteTileMode: 0
+  m_WasSpriteAssigned: 1
+  m_MaskInteraction: 0
+  m_SpriteSortPoint: 0
+--- !u!114 &1386469467
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1386469464}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 014bb3f6b98235440b59b57bcdb06731, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::FlameSparkPickup
+  windowDuration: 1.5
+  anchorPoint: {fileID: 0}
+  destroyOnPickup: 1
+  respawnSeconds: 1
+--- !u!4 &1386469468
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1386469464}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0.42261827, w: 0.9063079}
+  m_LocalPosition: {x: -3, y: -2, z: 0}
+  m_LocalScale: {x: 0.5, y: 0.5, z: 0}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 50}
 --- !u!1 &1386856116
 GameObject:
   m_ObjectHideFlags: 0
@@ -54009,3 +54160,4 @@ SceneRoots:
   - {fileID: 1597587103}
   - {fileID: 440229456}
   - {fileID: 222586888}
+  - {fileID: 1386469468}
