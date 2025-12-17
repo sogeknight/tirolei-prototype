@@ -3,8 +3,10 @@ using System.Collections.Generic;
 
 [RequireComponent(typeof(Rigidbody2D))]
 [RequireComponent(typeof(Collider2D))]
+[RequireComponent(typeof(PlayerPhysicsStateController))]
 public class PlayerMovementController : MonoBehaviour
 {
+
     [Header("Movimiento")]
     public float moveSpeed = 5f;
     public float jumpForce = 7f;
@@ -14,7 +16,10 @@ public class PlayerMovementController : MonoBehaviour
     public float jumpCutMultiplier = 0.5f;  // cuánto se reduce el salto al soltar antes
 
     [Header("Input")]
-    public KeyCode jumpKey = KeyCode.Z;
+    public KeyCode jumpKey = KeyCode.Z;   // teclado
+    public string jumpButton = "Jump";    // mando (X en Play)
+    public string horizontalAxis = "Horizontal"; // eje de movimiento (stick izq)
+
 
     [Header("Ground Detection (por colisiones)")]
     public string groundTag = "Ground";
@@ -32,10 +37,13 @@ public class PlayerMovementController : MonoBehaviour
     public bool movementLocked = false;
 
     private Rigidbody2D rb;
+    private PlayerPhysicsStateController phys;
+
 
     // En vez de un simple contador bruto, mapeamos los colliders que SON suelo ahora mismo
     private readonly Dictionary<Collider2D, bool> groundedColliders = new Dictionary<Collider2D, bool>();
     private bool isGrounded => groundedColliders.Count > 0;
+    public bool IsGrounded => isGrounded;
 
     // timers internos
     private float coyoteTimer = 0f;
@@ -48,6 +56,8 @@ public class PlayerMovementController : MonoBehaviour
     private void Awake()
     {
         rb = GetComponent<Rigidbody2D>();
+        phys = GetComponent<PlayerPhysicsStateController>();
+
         telemetry = GameplayTelemetry.Instance;
 
         if (telemetry != null)
@@ -58,6 +68,16 @@ public class PlayerMovementController : MonoBehaviour
 
     private void Update()
     {
+
+
+        for (int i = 0; i < 20; i++)
+        {
+            if (Input.GetKeyDown((KeyCode)((int)KeyCode.JoystickButton0 + i)))
+            {
+                Debug.Log("BOTÓN PULSADO: JoystickButton" + i);
+            }
+        }
+
         // Si algún sistema externo bloquea movimiento, no aplicamos input
         if (movementLocked)
         {
@@ -65,14 +85,19 @@ public class PlayerMovementController : MonoBehaviour
                 Debug.Log("DBG -> movementLocked, no aplico input");
             return;
         }
+        // Si estás en Dash o SparkAnchor, NO TOQUES el Rigidbody
+        if (phys != null && (phys.IsInDash() || phys.IsInSparkAnchor()))
+            return;
+
 
         // --------------------
         // MOVIMIENTO HORIZONTAL
         // --------------------
         Vector2 v = rb.linearVelocity;
-        float inputX = Input.GetAxisRaw("Horizontal");
+        float inputX = Input.GetAxisRaw(horizontalAxis);  // teclado + stick izq
         v.x = inputX * moveSpeed;
         rb.linearVelocity = v;
+
 
         // --------------------
         // COYOTE TIME
@@ -87,7 +112,10 @@ public class PlayerMovementController : MonoBehaviour
         // --------------------
         // JUMP BUFFER (solo GetKeyDown)
         // --------------------
-        if (Input.GetKeyDown(jumpKey))
+        // JUMP BUFFER (teclado o mando)
+        bool jumpPressed  = Input.GetKeyDown(jumpKey) || Input.GetKeyDown(KeyCode.JoystickButton0);
+
+        if (jumpPressed)
         {
             jumpBufferTimer = jumpBufferTime;
         }
@@ -95,6 +123,7 @@ public class PlayerMovementController : MonoBehaviour
         {
             jumpBufferTimer -= Time.deltaTime;
         }
+
 
         if (jumpBufferTimer < 0f) jumpBufferTimer = 0f;
 
@@ -128,7 +157,9 @@ public class PlayerMovementController : MonoBehaviour
         // --------------------
         // SALTO VARIABLE
         // --------------------
-        if (rb.linearVelocity.y > 0f && Input.GetKeyUp(jumpKey))
+        bool jumpReleased = Input.GetKeyUp(jumpKey)   || Input.GetKeyUp(KeyCode.JoystickButton0);
+
+        if (rb.linearVelocity.y > 0f && jumpReleased)
         {
             v = rb.linearVelocity;
             v.y *= jumpCutMultiplier;
@@ -137,11 +168,6 @@ public class PlayerMovementController : MonoBehaviour
             if (DEBUG_MOVEMENT) Debug.Log("DBG -> Jump cut aplicado");
         }
 
-        if (DEBUG_MOVEMENT)
-        {
-            Debug.Log($"DBG -> grounded={isGrounded}, " +
-                      $"coyote={coyoteTimer:F3}, buffer={jumpBufferTimer:F3}, velY={rb.linearVelocity.y:F2}");
-        }
     }
 
     // ---------
@@ -186,35 +212,35 @@ public class PlayerMovementController : MonoBehaviour
         }
     }
 
-    // ---------
-    // COLISIONES
-    // ---------
-    private void OnCollisionEnter2D(Collision2D collision)
-    {
-        if (!collision.collider.CompareTag(groundTag))
-            return;
+        // ---------
+        // COLISIONES
+        // ---------
+        private void OnCollisionEnter2D(Collision2D collision)
+        {
+            if (!collision.collider.CompareTag(groundTag))
+                return;
 
-        bool hasGroundContact = HasValidGroundContact(collision);
-        SetGroundedForCollider(collision.collider, hasGroundContact);
+            bool hasGroundContact = HasValidGroundContact(collision);
+            SetGroundedForCollider(collision.collider, hasGroundContact);
+        }
+
+        private void OnCollisionStay2D(Collision2D collision)
+        {
+            if (!collision.collider.CompareTag(groundTag))
+                return;
+
+            // si antes estabas tocando la parte superior, pero ahora solo estás rozando el lateral,
+            // HasValidGroundContact() pasará a false y se quitará ese collider del "suelo".
+            bool hasGroundContact = HasValidGroundContact(collision);
+            SetGroundedForCollider(collision.collider, hasGroundContact);
+        }
+
+        private void OnCollisionExit2D(Collision2D collision)
+        {
+            if (!collision.collider.CompareTag(groundTag))
+                return;
+
+            // al salir de la colisión, seguro que ya no es suelo
+            SetGroundedForCollider(collision.collider, false);
+        }
     }
-
-    private void OnCollisionStay2D(Collision2D collision)
-    {
-        if (!collision.collider.CompareTag(groundTag))
-            return;
-
-        // si antes estabas tocando la parte superior, pero ahora solo estás rozando el lateral,
-        // HasValidGroundContact() pasará a false y se quitará ese collider del "suelo".
-        bool hasGroundContact = HasValidGroundContact(collision);
-        SetGroundedForCollider(collision.collider, hasGroundContact);
-    }
-
-    private void OnCollisionExit2D(Collision2D collision)
-    {
-        if (!collision.collider.CompareTag(groundTag))
-            return;
-
-        // al salir de la colisión, seguro que ya no es suelo
-        SetGroundedForCollider(collision.collider, false);
-    }
-}
