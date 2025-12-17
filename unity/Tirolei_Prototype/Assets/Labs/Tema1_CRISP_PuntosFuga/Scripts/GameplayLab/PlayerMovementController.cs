@@ -3,8 +3,10 @@ using System.Collections.Generic;
 
 [RequireComponent(typeof(Rigidbody2D))]
 [RequireComponent(typeof(Collider2D))]
+[RequireComponent(typeof(PlayerPhysicsStateController))]
 public class PlayerMovementController : MonoBehaviour
 {
+
     [Header("Movimiento")]
     public float moveSpeed = 5f;
     public float jumpForce = 7f;
@@ -35,6 +37,8 @@ public class PlayerMovementController : MonoBehaviour
     public bool movementLocked = false;
 
     private Rigidbody2D rb;
+    private PlayerPhysicsStateController phys;
+
 
     // En vez de un simple contador bruto, mapeamos los colliders que SON suelo ahora mismo
     private readonly Dictionary<Collider2D, bool> groundedColliders = new Dictionary<Collider2D, bool>();
@@ -52,6 +56,8 @@ public class PlayerMovementController : MonoBehaviour
     private void Awake()
     {
         rb = GetComponent<Rigidbody2D>();
+        phys = GetComponent<PlayerPhysicsStateController>();
+
         telemetry = GameplayTelemetry.Instance;
 
         if (telemetry != null)
@@ -79,6 +85,10 @@ public class PlayerMovementController : MonoBehaviour
                 Debug.Log("DBG -> movementLocked, no aplico input");
             return;
         }
+        // Si estás en Dash o SparkAnchor, NO TOQUES el Rigidbody
+        if (phys != null && (phys.IsInDash() || phys.IsInSparkAnchor()))
+            return;
+
 
         // --------------------
         // MOVIMIENTO HORIZONTAL
