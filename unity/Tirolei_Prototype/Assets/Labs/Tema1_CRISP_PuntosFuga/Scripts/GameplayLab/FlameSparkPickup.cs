@@ -6,21 +6,20 @@ public class FlameSparkPickup : MonoBehaviour
 {
     [Header("Spark Pickup")]
     public float windowDuration = 1.0f;
-
-    [Tooltip("Si es null, el ancla es transform.position")]
     public Transform anchorPoint;
-
-    [Tooltip("Si está activo, el pickup desaparece tras recogerlo.")]
     public bool destroyOnPickup = true;
-
-    [Tooltip("Respawn simple por tiempo (opcional). Si 0, no respawnea.")]
     public float respawnSeconds = 0f;
 
     private SpriteRenderer sr;
     private Collider2D col;
 
     private bool available = true;
-    private Coroutine respawnRoutine;
+
+    // Trigger-wait-exit (solo para consumo por caminar)
+    private bool waitingForExit = false;
+    private Collider2D holderCol;
+
+    private Coroutine respawnCo;
 
     private void Awake()
     {
@@ -36,18 +35,9 @@ public class FlameSparkPickup : MonoBehaviour
             : (Vector2)transform.position;
     }
 
-    // =========================================================
-    // CAMINO 1: consumo desde DASH (rb.Cast)
-    // =========================================================
-    // PlayerSparkBoost llama a ESTE método
-    public void Consume()
-    {
-        ConsumeInternal(null);
-    }
-
-    // =========================================================
-    // CAMINO 2: consumo por TRIGGER
-    // =========================================================
+    // =====================================================
+    // TRIGGER NORMAL (caminar) -> espera Exit
+    // =====================================================
     private void OnTriggerEnter2D(Collider2D other)
     {
         if (!available) return;
@@ -58,80 +48,93 @@ public class FlameSparkPickup : MonoBehaviour
         var spark = rb.GetComponent<PlayerSparkBoost>();
         if (spark == null) return;
 
-        // Durante dash, el pickup lo gestiona el dash por cast
-        if (spark.IsDashing()) return;
+        // Si está en dash o ya tiene spark activo, el trigger NO gestiona nada
+        if (spark.IsDashing() || spark.IsSparkActive()) return;
 
-        Vector2 anchor = GetAnchorWorld();
+        holderCol = other;
 
-        spark.NotifyPickupBounce();
-        spark.ActivateSpark(windowDuration, anchor);
+        // CLAVE: AL CAMINAR NO HAY "PICKUP BOUNCE".
+        // Solo activas la ventana de spark anclada.
+        spark.ActivateSpark(windowDuration, GetAnchorWorld());
 
-        ConsumeInternal(other);
+        Consume(waitForExit: true);
     }
 
-    // =========================================================
-    // LÓGICA REAL DE CONSUMO
-    // =========================================================
-    private void ConsumeInternal(Collider2D collectorCollider)
+    private void OnTriggerExit2D(Collider2D other)
+    {
+        if (!waitingForExit) return;
+        if (other != holderCol) return;
+
+        waitingForExit = false;
+        holderCol = null;
+
+        StartRespawn();
+    }
+
+    // =====================================================
+    // DASH/X (rb.Cast) -> TU CÓDIGO LLAMA A ESTO
+    // =====================================================
+    public void Consume()
+    {
+        if (!available) return;
+        Consume(waitForExit: false); // dash: NO esperar Exit (no va a ocurrir)
+    }
+
+    // =====================================================
+    // NÚCLEO
+    // =====================================================
+    private void Consume(bool waitForExit)
     {
         if (!destroyOnPickup) return;
 
         available = false;
 
-        // Oculta y APAGA collider para evitar redisparos
-        if (sr != null) sr.enabled = false;
-        if (col != null) col.enabled = false;
+        if (sr != null)
+            sr.enabled = false;
 
-        if (respawnSeconds > 0f)
-        {
-            if (respawnRoutine != null)
-                StopCoroutine(respawnRoutine);
-
-            // Si venimos de trigger → esperar a que salga
-            if (collectorCollider != null)
-                respawnRoutine = StartCoroutine(RespawnAfterLeaving(collectorCollider));
-            else
-                // Si venimos de dash → no hay collider, empieza ya
-                respawnRoutine = StartCoroutine(RespawnAfterSeconds(respawnSeconds));
-        }
-        else
+        if (respawnSeconds <= 0f)
         {
             Destroy(gameObject);
+            return;
         }
+
+        if (waitForExit)
+        {
+            // Camino trigger: dejamos collider activo para que exista Exit
+            waitingForExit = true;
+            return;
+        }
+
+        // Camino dash: no existe Exit fiable en tu diseño (ancla/teleport)
+        waitingForExit = false;
+        holderCol = null;
+
+        StartRespawn();
     }
 
-    // =========================================================
-    // COROUTINES
-    // =========================================================
-    private IEnumerator RespawnAfterLeaving(Collider2D collector)
+    // =====================================================
+    // RESPAWN
+    // =====================================================
+    private void StartRespawn()
     {
-        // Espera a que el player NO solape el pickup
-        while (collector != null && col != null &&
-               collector.bounds.Intersects(col.bounds))
-        {
-            yield return null;
-        }
+        if (respawnCo != null)
+            StopCoroutine(respawnCo);
+
+        respawnCo = StartCoroutine(RespawnAfterTime());
+    }
+
+    private IEnumerator RespawnAfterTime()
+    {
+        // Apaga collider durante cooldown para que no haya re-trigger fantasma
+        if (col != null) col.enabled = false;
 
         yield return new WaitForSeconds(respawnSeconds);
-        Respawn();
-    }
 
-    private IEnumerator RespawnAfterSeconds(float seconds)
-    {
-        yield return new WaitForSeconds(seconds);
-        Respawn();
-    }
-
-    // =========================================================
-    // RESPAWN
-    // =========================================================
-    private void Respawn()
-    {
         available = true;
 
         if (sr != null) sr.enabled = true;
         if (col != null) col.enabled = true;
 
-        respawnRoutine = null;
+        respawnCo = null;
     }
 }

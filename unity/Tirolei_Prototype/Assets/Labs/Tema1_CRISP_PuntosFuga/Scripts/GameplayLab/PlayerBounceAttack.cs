@@ -47,6 +47,10 @@ public class PlayerBounceAttack : MonoBehaviour
     public LayerMask bounceLayers;
     public float skin = 0.02f;
 
+    
+    [Header("Daño")]
+    public int bounceDamage = 20;
+
     [Header("Preview trayectoria")]
     public LineRenderer previewLine;
     public int previewSegments = 30;
@@ -77,6 +81,10 @@ public class PlayerBounceAttack : MonoBehaviour
     private Vector2 aimStartPosition;
 
     private PlayerSparkBoost spark;
+
+    public bool IsAiming => isAiming;
+    public bool IsBouncing => isBouncing;
+
 
     private void Awake()
     {
@@ -123,10 +131,15 @@ public class PlayerBounceAttack : MonoBehaviour
         if (!isAiming && !isBouncing && attackDown)
         {
             if (!CanStartAiming())
+            {
+                Debug.LogWarning($"[BounceAttack] BLOQUEADO: flame={flame:0.##}, costStart={flameCostStart:0.##}, useFlame={useFlame}, blockIfNoFlame={blockBounceIfNoFlame}");
                 return;
+            }
 
+            Debug.Log($"[BounceAttack] OK: StartAiming (flame={flame:0.##})");
             StartAiming();
         }
+
 
         if (isAiming)
         {
@@ -466,18 +479,18 @@ public class PlayerBounceAttack : MonoBehaviour
         if (enemy != null)
         {
             Debug.Log("[BounceAttack] HIT ENEMY BY BOUNCE ATTACK");
-            enemy.TakeHit(20);
+            enemy.TakeHit(bounceDamage);
         }
     }
 
     // ================== DEBUG ==================
 
-    private void OnGUI()
-    {
-        if (!debugOnScreen) return;
+    // private void OnGUI()
+    // {
+    //     if (!debugOnScreen) return;
 
-        GUI.Label(new Rect(12, 12, 520, 22), $"Flame: {flame:0.0}/{maxFlame:0.0}");
-        GUI.Label(new Rect(12, 32, 520, 22), $"Spent Total: {flameSpentTotal:0.0} | Spent Bounce: {flameSpentThisBounce:0.0}");
-        GUI.Label(new Rect(12, 52, 520, 22), $"Aiming: {isAiming} | Bouncing: {isBouncing} | Invincible: {isInvincible}");
-    }
+    //     GUI.Label(new Rect(12, 12, 520, 22), $"Flame: {flame:0.0}/{maxFlame:0.0}");
+    //     GUI.Label(new Rect(12, 32, 520, 22), $"Spent Total: {flameSpentTotal:0.0} | Spent Bounce: {flameSpentThisBounce:0.0}");
+    //     GUI.Label(new Rect(12, 52, 520, 22), $"Aiming: {isAiming} | Bouncing: {isBouncing} | Invincible: {isInvincible}");
+    // }
 }

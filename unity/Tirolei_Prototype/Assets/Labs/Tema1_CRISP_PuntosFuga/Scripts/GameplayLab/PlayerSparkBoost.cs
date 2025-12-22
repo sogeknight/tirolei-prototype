@@ -39,6 +39,9 @@ public class PlayerSparkBoost : MonoBehaviour
     public LayerMask dashCollisionMask = ~0;
     [Range(0f, 0.06f)] public float dashSkin = 0.015f;
 
+    [Header("Dash Tuning")]
+    [Range(0.5f, 1f)] public float dashDistanceScale = 1f;
+
     [Header("Dash Rebotes")]
     public bool dashBouncesOnWalls = true;
     [Range(0, 12)] public int dashMaxBounces = 6;
@@ -63,6 +66,19 @@ public class PlayerSparkBoost : MonoBehaviour
     public string previewSortingLayer = "Default";
     public int previewSortingOrder = 9999;
 
+    [Header("Preview Safety Margin")]
+    [Tooltip("Multiplicador SOLO para la PREVIEW (seguridad). 0.97 = preview 3% más corta que el dash real.")]
+    [Range(0.10f, 1.00f)] public float previewSafetyMultiplier = 0.99f; // empieza por 0.99
+
+    [Header("Preview Pickup Marker")]
+    public bool previewMarkNextPickup = true;
+    public LineRenderer pickupPreviewCircle;
+    public float pickupCircleRadius = 0.35f;
+    public int pickupCircleSegments = 32;
+    public float pickupCircleWidth = 0.06f;
+    public string pickupCircleSortingLayer = "Default";
+    public int pickupCircleSortingOrder = 10000;
+
     public Color previewColorMiss = new Color(1f, 0.8f, 0.2f, 0.95f);
     public Color previewColorGood = new Color(0.4f, 0.9f, 1f, 0.95f);
     public Color previewColorPerfect = new Color(1f, 0.2f, 0.2f, 0.95f);
@@ -81,27 +97,82 @@ public class PlayerSparkBoost : MonoBehaviour
     [Header("Debug Aim")]
     public bool debugAim = true;
     public float debugRayLength = 2.0f;
-    public float debugLogEvery = 0.12f; // segundos (0 = cada frame)
+    public float debugLogEvery = 0.12f;
     private float _debugNextLog;
 
+    // =========================
+    // DEBUG - Freeze Preview + Permanent Trail
+    // =========================
+    [Header("DEBUG - Freeze Preview After Dash (permanent)")]
+    public bool debugFreezePreview = true;
+    public bool debugFreezeOnDashStart = true;
+    public int frozenLineSortingOrder = 20000;
+    public float frozenLineWidth = 0.08f;
+
+    [Header("DEBUG - Frozen Dash Trail (permanent real path)")]
+    public bool debugFrozenDashTrail = true;
+    public int frozenTrailMaxPoints = 512;
+    public float frozenTrailMinStep = 0.03f;
+    public float frozenTrailWidth = 0.06f;
+    public int frozenTrailSortingOrder = 20001;
+
+    [Header("DEBUG - Hotkeys")]
+    public KeyCode debugClearAllKey = KeyCode.F8;
+    public KeyCode debugClearFrozenPreviewKey = KeyCode.F9;
+    public KeyCode debugClearFrozenTrailKey = KeyCode.F10;
+
+    // =========================
+    // DEBUG - Dash Trail (TrailRenderer normal - NO permanente)
+    // =========================
+    [Header("DEBUG - Dash Trail (ephemeral)")]
+    public bool debugDashTrail = true;
+    [Tooltip("Cuánto dura el rastro (segundos). (Esto NO será permanente.)")]
+    [Range(0.02f, 0.5f)] public float dashTrailTime = 0.12f;
+    [Range(0.001f, 0.5f)] public float dashTrailStartWidth = 0.10f;
+    [Range(0.001f, 0.5f)] public float dashTrailEndWidth = 0.02f;
+    public Color dashTrailColor = new Color(1f, 1f, 1f, 0.85f);
+    public string dashTrailSortingLayer = "Default";
+    public int dashTrailSortingOrder = 10001;
+
+    private TrailRenderer dashTrail;
 
     [Header("Spark - Hold to Aim (Pause Timer)")]
     public bool holdToAimPausesTimer = true;
-
-    [Tooltip("Si true, el dash se ejecuta al SOLTAR la tecla (KeyUp) en lugar de al pulsar (KeyDown).")]
     public bool dashOnReleaseWhenHoldToAim = true;
-
-    [Tooltip("Máximo tiempo total (seg) que puedes congelar el timer manteniendo X. 0 = infinito.")]
     public float maxTotalHoldPauseTime = 0f;
+
+    // =========================
+    // Anti “impulso acumulado” de BounceAttack
+    // =========================
+    [Header("Anti BounceAttack Accumulated Impulse")]
+    public bool absorbResidualImpulseFromBounceAttack = true;
+    [Range(0, 12)] public int residualAbsorbFrames = 6;
+    [Range(0f, 0.20f)] public float residualAbsorbTime = 0.05f;
+
+    // =========================
+    // BounceAttack Restore Guard
+    // =========================
+    [Header("BounceAttack Restore Guard")]
+    [Range(0f, 0.30f)] public float bounceRestoreDelay = 0.12f;
+    [Range(0, 20)] public int postRestoreAbsorbFrames = 8;
+    [Range(0f, 0.30f)] public float postRestoreAbsorbTime = 0.10f;
+
+    private int residualAbsorbFramesLeft = 0;
+    private float residualAbsorbUntilTime = -1f;
+
+    private bool pendingRestoreBounce;
+    private float pendingRestoreBounceUntil = -1f;
+
+    private bool postRestoreGuardActive;
+    private float postRestoreGuardUntil = -1f;
 
     private bool isHoldingAim;
     private float holdPauseSpent;
 
-
-
     private Rigidbody2D rb;
     private PlayerMovementController move;
     private PlayerPhysicsStateController phys;
+    private Collider2D playerCol;
 
     private bool sparkActive;
     private float sparkTimer;
@@ -114,11 +185,8 @@ public class PlayerSparkBoost : MonoBehaviour
     private float dashTimer;
     private Vector2 dashDir;
     private float dashSpeedFinal;
-
-    // Dash por distancia total (no por tiempo)
-    private Vector2 dashStartPos;
     private float dashRemainingDist;
-
+    private int dashBouncesUsed; // rebotes usados en TODO el dash (no por frame)
 
     private bool cachedMoveLockValid;
     private bool cachedMoveLockValue;
@@ -130,53 +198,234 @@ public class PlayerSparkBoost : MonoBehaviour
     private float pickupInputBlockedUntil = -1f;
 
     private bool dashBuffered;
-
-    // IMPORTANT: 1 dash por ventana
     private bool dashUsedThisSpark;
 
-    // Backup del RB para no pelear con freezes
     private float prevGravity;
     private RigidbodyConstraints2D prevConstraints;
     private RigidbodyInterpolation2D prevInterp;
     private bool rbStateBackedUp;
 
-    // Backup constraints durante dash (por si alguien te deja FreezeAll)
     private RigidbodyConstraints2D dashPrevConstraints;
     private bool dashBackedConstraints;
 
-    // Cast buffers
-    private readonly RaycastHit2D[] castHits = new RaycastHit2D[32];
-
-    public bool IsSparkActive() => sparkActive;
-    public bool IsDashing() => dashActive;
-
-    // Backup extra durante dash (para evitar curvatura por gravedad/interp)
     private float dashPrevGravity;
     private RigidbodyInterpolation2D dashPrevInterp;
     private bool dashBackedState;
 
-    // Backup bodyType durante dash (para evitar que otros scripts metan física)
     private RigidbodyType2D dashPrevBodyType;
     private bool dashBackedBodyType;
 
+    private float baseGravity;
+    private RigidbodyConstraints2D baseConstraints;
+    private RigidbodyInterpolation2D baseInterp;
+    private RigidbodyType2D baseBodyType;
 
-    // Aim lock durante dash (para que la cruceta NO afecte el recorrido)
+    private readonly RaycastHit2D[] castHits = new RaycastHit2D[64];
+
+    public bool IsSparkActive() => sparkActive;
+    public bool IsDashing() => dashActive;
+
     private bool aimLocked;
     private Vector2 aimLockedDir = Vector2.up;
 
+    private BoxCollider2D boxCol;
+    private CapsuleCollider2D capsuleCol;
+    private CircleCollider2D circleCol;
 
+    private PlayerBounceAttack bounceAtk;
+    private bool bounceAtkHadComponent;
+    private bool bounceAtkWasEnabled;
+    private bool bounceAtkStateCached;
 
+    private bool forceUnlockOnSparkExit;
+
+    // ========= DEBUG persistent objects =========
+    private LineRenderer frozenPreviewLine;
+    private bool frozenHasData;
+
+    private LineRenderer frozenTrailLine;
+    private readonly List<Vector3> frozenTrailPts = new List<Vector3>(512);
+    private Vector3 lastFrozenTrailPt;
+    private bool frozenTrailRecording;
+
+    // =========================
+    // FIX PREVIEW VISIBILITY (compat)
+    // =========================
+    [Header("Preview - Safety")]
+    [Tooltip("Ya NO se usa para empujar la preview cuando el dash real no puede avanzar. Se mantiene por compatibilidad.")]
+    public bool previewForceMinSegment = true;
+
+    [Tooltip("Ya NO se usa para empujar la preview cuando el dash real no puede avanzar. Se mantiene por compatibilidad.")]
+    [Range(0.01f, 0.50f)] public float previewMinSegmentLength = 0.12f;
+
+    // =========================
+    // Collider world-scale helpers (CLAVE)
+    // =========================
+    private Vector2 AbsLossyScale2D()
+    {
+        Vector3 s = transform.lossyScale;
+        return new Vector2(Mathf.Abs(s.x), Mathf.Abs(s.y));
+    }
+
+    private Vector2 ScaleOffset(Vector2 localOffset)
+    {
+        Vector2 s = AbsLossyScale2D();
+        return new Vector2(localOffset.x * s.x, localOffset.y * s.y);
+    }
+
+    private Vector2 ScaleSize(Vector2 localSize)
+    {
+        Vector2 s = AbsLossyScale2D();
+        return new Vector2(localSize.x * s.x, localSize.y * s.y);
+    }
+
+    private float ScaleRadius(float localRadius)
+    {
+        Vector2 s = AbsLossyScale2D();
+        return localRadius * Mathf.Max(s.x, s.y);
+    }
+
+    // =========================
+    // BounceAttack cache / restore
+    // =========================
+    private void CacheBounceAttack()
+    {
+        bounceAtk = GetComponent<PlayerBounceAttack>();
+        bounceAtkHadComponent = (bounceAtk != null);
+        bounceAtkStateCached = false;
+    }
+
+    private void SendBounceHardResets()
+    {
+        if (!bounceAtkHadComponent || bounceAtk == null) return;
+
+        bounceAtk.SendMessage("ForceCancel", SendMessageOptions.DontRequireReceiver);
+        bounceAtk.SendMessage("Cancel", SendMessageOptions.DontRequireReceiver);
+        bounceAtk.SendMessage("Abort", SendMessageOptions.DontRequireReceiver);
+        bounceAtk.SendMessage("ResetAccumulation", SendMessageOptions.DontRequireReceiver);
+        bounceAtk.SendMessage("ResetCharge", SendMessageOptions.DontRequireReceiver);
+    }
+
+    private void DisableBounceAttackHard()
+    {
+        if (!bounceAtkHadComponent || bounceAtk == null) return;
+
+        SendBounceHardResets();
+
+        if (!bounceAtkStateCached)
+        {
+            bounceAtkWasEnabled = bounceAtk.enabled;
+            bounceAtkStateCached = true;
+        }
+
+        bounceAtk.enabled = false;
+    }
+
+    private void StartResidualAbsorbIfNeeded()
+    {
+        if (!absorbResidualImpulseFromBounceAttack) return;
+
+        residualAbsorbFramesLeft = Mathf.Max(residualAbsorbFramesLeft, residualAbsorbFrames);
+        if (residualAbsorbTime > 0f)
+            residualAbsorbUntilTime = Mathf.Max(residualAbsorbUntilTime, Time.time + residualAbsorbTime);
+    }
+
+    private void StartPostRestoreGuard()
+    {
+        if (!absorbResidualImpulseFromBounceAttack) return;
+
+        residualAbsorbFramesLeft = Mathf.Max(residualAbsorbFramesLeft, postRestoreAbsorbFrames);
+        if (postRestoreAbsorbTime > 0f)
+            residualAbsorbUntilTime = Mathf.Max(residualAbsorbUntilTime, Time.time + Mathf.Max(0.01f, postRestoreAbsorbTime));
+
+        postRestoreGuardActive = true;
+        postRestoreGuardUntil = Mathf.Max(postRestoreGuardUntil, Time.time + Mathf.Max(0.01f, postRestoreAbsorbTime));
+    }
+
+    private bool IsResidualAbsorbActive()
+    {
+        if (!absorbResidualImpulseFromBounceAttack) return false;
+        if (residualAbsorbFramesLeft > 0) return true;
+        if (residualAbsorbUntilTime > 0f && Time.time < residualAbsorbUntilTime) return true;
+        return false;
+    }
+
+    private void ApplyResidualAbsorb()
+    {
+        rb.linearVelocity = Vector2.zero;
+        rb.angularVelocity = 0f;
+    }
+
+    private void ScheduleBounceRestoreDeferred()
+    {
+        if (!bounceAtkHadComponent || bounceAtk == null) return;
+        if (!bounceAtkStateCached) return;
+
+        pendingRestoreBounce = true;
+        pendingRestoreBounceUntil = Mathf.Max(
+            pendingRestoreBounceUntil,
+            Time.time + Mathf.Max(0f, bounceRestoreDelay)
+        );
+    }
+
+    private void RestoreBounceAttackIfNeeded()
+    {
+        if (!bounceAtkHadComponent || bounceAtk == null) return;
+
+        if (IsResidualAbsorbActive())
+        {
+            ScheduleBounceRestoreDeferred();
+            return;
+        }
+
+        if (pendingRestoreBounce && pendingRestoreBounceUntil > 0f && Time.time < pendingRestoreBounceUntil)
+            return;
+
+        if (bounceAtkStateCached)
+        {
+            SendBounceHardResets();
+
+            bounceAtk.enabled = bounceAtkWasEnabled;
+            bounceAtkStateCached = false;
+
+            SendBounceHardResets();
+            StartPostRestoreGuard();
+        }
+
+        pendingRestoreBounce = false;
+        pendingRestoreBounceUntil = -1f;
+    }
+
+    // =========================
+    // Unity events
+    // =========================
     private void Awake()
     {
         rb = GetComponent<Rigidbody2D>();
         move = GetComponent<PlayerMovementController>();
         phys = GetComponent<PlayerPhysicsStateController>();
+        playerCol = GetComponent<Collider2D>();
+
+        CacheBounceAttack();
+
+        boxCol = playerCol as BoxCollider2D;
+        capsuleCol = playerCol as CapsuleCollider2D;
+        circleCol = playerCol as CircleCollider2D;
+
+        baseGravity = rb.gravityScale;
+        baseConstraints = rb.constraints;
+        baseInterp = rb.interpolation;
+        baseBodyType = rb.bodyType;
 
         ConfigurePreviewAuto();
         ConfigureRingAuto();
+        ConfigurePickupCircleAuto();
+
+        SetupDashTrail();
 
         SetPreviewVisible(false);
         SetRingVisible(false);
+        SetPickupCircleVisible(false);
     }
 
     private void OnDisable() => ForceEndAll();
@@ -184,24 +433,40 @@ public class PlayerSparkBoost : MonoBehaviour
 
     private void Update()
     {
+        if (debug)
+        {
+            if (Input.GetKeyDown(debugClearAllKey))
+            {
+                DebugClearFrozenPreview();
+                DebugClearFrozenTrail();
+            }
+            if (Input.GetKeyDown(debugClearFrozenPreviewKey))
+                DebugClearFrozenPreview();
+            if (Input.GetKeyDown(debugClearFrozenTrailKey))
+                DebugClearFrozenTrail();
+        }
+
+        if (IsResidualAbsorbActive())
+        {
+            ApplyResidualAbsorb();
+            if (residualAbsorbFramesLeft > 0) residualAbsorbFramesLeft--;
+        }
+
+        if (pendingRestoreBounce || bounceAtkStateCached)
+            RestoreBounceAttackIfNeeded();
+
         if (!sparkActive) return;
 
-        // --- INPUT ---
         bool boostDown = Input.GetKeyDown(boostKey) || Input.GetKeyDown(boostPadKey);
         bool boostHeld = Input.GetKey(boostKey) || Input.GetKey(boostPadKey);
-        bool boostUp   = Input.GetKeyUp(boostKey) || Input.GetKeyUp(boostPadKey);
+        bool boostUp = Input.GetKeyUp(boostKey) || Input.GetKeyUp(boostPadKey);
 
-        DebugAimSample("UPDATE");
-
-
-        // --- HOLD MODE STATE ---
         if (holdToAimPausesTimer && boostDown && !dashActive)
             isHoldingAim = true;
 
         if (boostUp)
             isHoldingAim = false;
 
-        // --- TIMER (pause while holding) ---
         bool pauseTimerNow = false;
         if (holdToAimPausesTimer && isHoldingAim && boostHeld && !dashActive)
         {
@@ -214,16 +479,21 @@ public class PlayerSparkBoost : MonoBehaviour
         else
             sparkTimer -= Time.deltaTime;
 
-        // --- EXPIRE ---
         if (sparkTimer <= 0f)
         {
+            dashBuffered = false;
+            isHoldingAim = false;
+            holdPauseSpent = 0f;
+
+            rb.linearVelocity = Vector2.zero;
+            rb.angularVelocity = 0f;
+
             EndSparkWindow();
             RestoreMovementLock();
-            RestoreRigidbodyStateIfNeeded();
+            HardRestoreRigidbodyBaseline();
             return;
         }
 
-        // --- VISUALS ---
         UpdatePreviewWithBounces();
         UpdateRing();
 
@@ -232,26 +502,12 @@ public class PlayerSparkBoost : MonoBehaviour
         if (ignoreInputOnPickupFrame && Time.frameCount == pickupFrame)
             return;
 
-        // --- DASH TRIGGER ---
-        // En hold-to-aim: dash al SOLTAR. Si no: dash al PULSAR como antes.
-        bool tryDashNow;
-        if (holdToAimPausesTimer && dashOnReleaseWhenHoldToAim)
-            tryDashNow = boostUp;
-        else
-            tryDashNow = boostDown;
+        bool tryDashNow = (holdToAimPausesTimer && dashOnReleaseWhenHoldToAim) ? boostUp : boostDown;
 
         if (tryDashNow)
         {
-            if (IsInputTemporarilyBlocked())
-            {
-                dashBuffered = true;
-                if (debug) Debug.Log("[SPARK] Dash buffered (blocked)");
-            }
-            else
-            {
-                TriggerDash();
-                return;
-            }
+            if (IsInputTemporarilyBlocked()) dashBuffered = true;
+            else { TriggerDash(); return; }
         }
 
         if (dashBuffered && !IsInputTemporarilyBlocked())
@@ -261,6 +517,25 @@ public class PlayerSparkBoost : MonoBehaviour
         }
     }
 
+    private void LateUpdate()
+    {
+        if (IsResidualAbsorbActive())
+        {
+            ApplyResidualAbsorb();
+            return;
+        }
+
+        if (postRestoreGuardActive)
+        {
+            ApplyResidualAbsorb();
+
+            if (postRestoreGuardUntil > 0f && Time.time >= postRestoreGuardUntil)
+            {
+                postRestoreGuardActive = false;
+                postRestoreGuardUntil = -1f;
+            }
+        }
+    }
 
     private bool IsInputTemporarilyBlocked()
     {
@@ -271,21 +546,22 @@ public class PlayerSparkBoost : MonoBehaviour
 
     private void FixedUpdate()
     {
+        if (IsResidualAbsorbActive())
+            ApplyResidualAbsorb();
+
         if (dashActive)
         {
             phys.RequestDash();
             DashStep(Time.fixedDeltaTime);
+
+            // if (debug && debugFrozenDashTrail)
+            //     DebugAddFrozenTrailPoint();
+
             return;
         }
 
-        // ANCLA SOLO SI ESTÁS EN HOLD (cuando holdToAimPausesTimer está activo)
-        bool allowAnchorNow = true;
-        if (holdToAimPausesTimer)
-            allowAnchorNow = isHoldingAim;
-
-        if (sparkActive && anchorPlayerDuringSpark && anchorValid && allowAnchorNow)
+        if (sparkActive && anchorPlayerDuringSpark && anchorValid)
         {
-            // Durante el rebote del pickup, NO anclamos
             if (physicalBounceOnPickup && Time.time < noAnchorUntil)
                 return;
 
@@ -294,39 +570,45 @@ public class PlayerSparkBoost : MonoBehaviour
             move.movementLocked = true;
             rb.linearVelocity = Vector2.zero;
             rb.angularVelocity = 0f;
-            rb.MovePosition(sparkAnchorPos);
+
+            rb.position = sparkAnchorPos;
         }
     }
 
-
+    // =========================
+    // Public spark API
+    // =========================
     public void ActivateSpark(float duration) => ActivateSpark(duration, rb.position);
 
     public void ActivateSpark(float duration, Vector2 anchorWorldPos)
     {
-        float dur = (duration > 0f) ? duration : defaultWindowDuration;
+        HardRestoreRigidbodyBaseline();
 
-        // Si venimos de estados transitorios (dash / bounce / lo que sea), NO cachees el lock como "original".
-        bool transientLock = dashActive; // añade aquí más condiciones si tienes flags (ej. bounceAttack.IsActive)
+        bool bounceWasOnNow = (bounceAtkHadComponent && bounceAtk != null && bounceAtk.enabled);
+
+        DisableBounceAttackHard();
+        aimLocked = false;
+
+        forceUnlockOnSparkExit = bounceWasOnNow;
+        if (bounceWasOnNow)
+            StartResidualAbsorbIfNeeded();
+
+        float dur = (duration > 0f) ? duration : defaultWindowDuration;
 
         if (!cachedMoveLockValid)
         {
-            cachedMoveLockValue = transientLock ? false : move.movementLocked;
+            cachedMoveLockValue = move.movementLocked;
             cachedMoveLockValid = true;
         }
 
-        // Guardarraíl: si alguien te trae aquí con el player bloqueado (bounce/dash), no aceptes ese lock heredado.
-        if (transientLock)
-            move.movementLocked = false;
-
-
-
         sparkActive = true;
-        dashUsedThisSpark = false; // RESET: 1 dash por ventana
+        dashUsedThisSpark = false;
+
         sparkTimerTotal = Mathf.Max(0.05f, dur);
         sparkTimer = sparkTimerTotal;
+
         isHoldingAim = false;
         holdPauseSpent = 0f;
-
 
         sparkAnchorPos = anchorWorldPos;
         anchorValid = true;
@@ -352,18 +634,17 @@ public class PlayerSparkBoost : MonoBehaviour
         }
         else
         {
-            RestoreRigidbodyStateIfNeeded();
+            HardRestoreRigidbodyBaseline();
             move.movementLocked = false;
         }
-
-        if (debug) Debug.Log($"[SPARK] ON dur={sparkTimerTotal:0.00}");
     }
 
     public void NotifyPickupBounce()
     {
         if (!physicalBounceOnPickup) return;
 
-        RestoreRigidbodyStateIfNeeded();
+        HardRestoreRigidbodyBaseline();
+        DisableBounceAttackHard();
         move.movementLocked = false;
 
         var v = rb.linearVelocity;
@@ -371,21 +652,24 @@ public class PlayerSparkBoost : MonoBehaviour
         rb.linearVelocity = v;
 
         noAnchorUntil = Time.time + Mathf.Max(0.01f, bounceNoAnchorTime);
+        StartResidualAbsorbIfNeeded();
     }
 
+    // =========================
+    // Dash
+    // =========================
     private void TriggerDash()
     {
-        // BLOQUEO: 1 dash por Spark
         if (dashUsedThisSpark) return;
         dashUsedThisSpark = true;
 
-        RestoreRigidbodyStateIfNeeded();
+        HardRestoreRigidbodyBaseline();
+        DisableBounceAttackHard();
         anchorValid = false;
 
         float progress = 1f - (sparkTimer / sparkTimerTotal);
         float mult = ComputeMultiplier(progress);
-
-        DebugAimSample("BEFORE_DASH");
+        Color phaseColor = ComputePhaseColor(progress);
 
         dashDir = GetAimDirection8();
         if (dashDir.sqrMagnitude < 0.0001f) dashDir = Vector2.up;
@@ -394,18 +678,23 @@ public class PlayerSparkBoost : MonoBehaviour
         aimLocked = true;
         aimLockedDir = dashDir;
 
-        DebugAimSample("AFTER_LOCK");
-
-
         dashSpeedFinal = dashSpeed * mult;
+        dashRemainingDist = dashSpeedFinal * dashDuration * Mathf.Clamp(dashDistanceScale, 0.5f, 1f);
 
-        dashStartPos = rb.position;
-        dashRemainingDist = dashSpeedFinal * dashDuration;
+        dashBouncesUsed = 0;
 
+        // if (debug && debugFreezePreview && debugFreezeOnDashStart)
+        //     DebugFreezeCurrentPreview(phaseColor);
 
-        EndSparkWindow(); // apaga preview + ring, pero el dash empieza ya
+        // if (debug && debugFrozenDashTrail)
+        //     DebugStartFrozenTrail(phaseColor);
+
+        EndSparkWindow();
 
         dashActive = true;
+
+        EnableDashTrail(true);
+
         dashTimer = Mathf.Max(0.01f, dashDuration);
 
         if (!dashBackedConstraints)
@@ -417,7 +706,7 @@ public class PlayerSparkBoost : MonoBehaviour
         if (!dashBackedState)
         {
             dashPrevGravity = rb.gravityScale;
-            dashPrevInterp  = rb.interpolation;
+            dashPrevInterp = rb.interpolation;
             dashBackedState = true;
         }
 
@@ -427,124 +716,149 @@ public class PlayerSparkBoost : MonoBehaviour
             dashBackedBodyType = true;
         }
 
-        // Durante dash: kinematic (nadie te mete gravedad/velocidad)
         rb.bodyType = RigidbodyType2D.Kinematic;
-
-
-        // DURANTE DASH: 0 gravedad y sin interpolation para que sea recto y coincida con la preview
         rb.gravityScale = 0f;
-        rb.interpolation = RigidbodyInterpolation2D.None;
-
+        rb.interpolation = RigidbodyInterpolation2D.Interpolate;
         rb.constraints = RigidbodyConstraints2D.None;
-
 
         move.movementLocked = true;
         rb.linearVelocity = Vector2.zero;
         rb.angularVelocity = 0f;
 
-        if (debug) Debug.Log($"[SPARK] DASH speed={dashSpeedFinal:0.00} dur={dashTimer:0.00}");
+        if (debug && debugFrozenDashTrail)
+            DebugAddFrozenTrailPoint(force: true);
     }
 
-    private void DashStep(float dt)
+    private bool PickupUsable(FlameSparkPickup p)
     {
-        // Defensa dura: durante dash no permitimos que nada meta velocidad
-        rb.linearVelocity = Vector2.zero;
-        rb.angularVelocity = 0f;
+        if (p == null) return false;
 
-        Vector2 pos = rb.position;
-        Vector2 dir = dashDir;
+        var pCol = p.GetComponent<Collider2D>();
+        if (pCol != null && !pCol.enabled) return false;
 
-        DebugAimSample("DASHSTEP");
+        var pSr = p.GetComponent<SpriteRenderer>();
+        if (pSr != null && !pSr.enabled) return false;
 
-        // Distancia de este tick, clamped a lo que queda del dash
-        float step = Mathf.Min(dashRemainingDist, dashSpeedFinal * dt);
-        float remaining = step;
+        return true;
+    }
 
-        // =========================
-        // PRIORIDAD PICKUP (rb.Cast)
-        // =========================
-        float pickupDist = float.MaxValue;
-        FlameSparkPickup pickup = null;
+    // (REEMPLAZADA) CON ESCALA REAL
+    private bool TryFindPickupAlong(Vector2 originPos, Vector2 dir, float dist, out FlameSparkPickup bestPickup, out float bestDist)
+    {
+        bestPickup = null;
+        bestDist = float.MaxValue;
 
-        float pickupCastDist = remaining + dashSkin + pickupSweepExtra;
+        if (!previewMarkNextPickup && !dashActive)
+            return false;
 
         var cfPick = new ContactFilter2D();
         cfPick.useLayerMask = false;
         cfPick.useTriggers = true;
 
-        int pickCount = rb.Cast(dir, cfPick, castHits, pickupCastDist);
-        for (int i = 0; i < pickCount; i++)
+        int count = 0;
+
+        if (boxCol != null)
+        {
+            Vector2 center = originPos + ScaleOffset(boxCol.offset);
+            Vector2 sizeW = ScaleSize(boxCol.size);
+            count = Physics2D.BoxCast(center, sizeW, 0f, dir, cfPick, castHits, dist);
+        }
+        else if (capsuleCol != null)
+        {
+            Vector2 center = originPos + ScaleOffset(capsuleCol.offset);
+            Vector2 sizeW = ScaleSize(capsuleCol.size);
+            count = Physics2D.CapsuleCast(center, sizeW, capsuleCol.direction, 0f, dir, cfPick, castHits, dist);
+        }
+        else if (circleCol != null)
+        {
+            Vector2 center = originPos + ScaleOffset(circleCol.offset);
+            float rW = ScaleRadius(circleCol.radius);
+            count = Physics2D.CircleCast(center, rW, dir, cfPick, castHits, dist);
+        }
+        else
+        {
+            Bounds b = playerCol.bounds;
+            Vector2 center = originPos + (Vector2)(b.center - (Vector3)rb.position);
+            Vector2 size = b.size;
+            count = Physics2D.BoxCast(center, size, 0f, dir, cfPick, castHits, dist);
+        }
+
+        if (count <= 0) return false;
+
+        for (int i = 0; i < count; i++)
         {
             var h = castHits[i];
             if (h.collider == null) continue;
 
             var p = h.collider.GetComponent<FlameSparkPickup>() ?? h.collider.GetComponentInParent<FlameSparkPickup>();
             if (p == null) continue;
+            if (!PickupUsable(p)) continue;
 
             float d = Mathf.Max(0f, h.distance);
-            if (d < pickupDist)
+            if (d < 0.0015f) continue;
+
+            if (d < bestDist)
             {
-                pickupDist = d;
-                pickup = p;
+                bestDist = d;
+                bestPickup = p;
             }
         }
 
-        int bounces = 0;
+        return bestPickup != null;
+    }
 
-        while (remaining > 0f)
+    // ==========================================================
+    // DASHSTEP CORREGIDO: consume distancia REAL recorrida, NO "step ideal"
+    // ==========================================================
+    private void DashStep(float dt)
+    {
+        rb.linearVelocity = Vector2.zero;
+        rb.angularVelocity = 0f;
+
+        Vector2 startPos = rb.position;   // <- CLAVE
+        Vector2 pos = startPos;
+        Vector2 dir = dashDir;
+
+        float step = Mathf.Min(dashRemainingDist, dashSpeedFinal * dt);
+        float remaining = step;
+
+        int safety = 0;
+        const int SAFETY_MAX = 32;
+
+        while (remaining > 0f && safety++ < SAFETY_MAX)
         {
-            // ---- PICKUP hit dentro del remaining de este tick ----
+            FlameSparkPickup pickup = null;
+            float pickupDist = float.MaxValue;
+
+            float pickupCastDist = remaining + dashSkin + pickupSweepExtra;
+            TryFindPickupAlong(pos, dir, pickupCastDist, out pickup, out pickupDist);
+
             if (pickup != null && pickupDist <= remaining + dashSkin)
             {
-                Vector2 anchor = pickup.GetAnchorWorld();
-
-                // Cierra el dash BIEN (restaurando RB state) antes de entrar en Spark otra vez
-                AbortDashToPickup();
-
-                rb.position = snapToPickupAnchorOnDash
-                    ? anchor
-                    : (pos + dir * Mathf.Max(0f, pickupDist - dashSkin));
-
-                rb.linearVelocity = Vector2.zero;
-                rb.angularVelocity = 0f;
-
-                pickup.Consume();
-
-                NotifyPickupBounce();
-                ActivateSpark(pickup.windowDuration, anchor);
-                return;
-            }
-
-
-            // =========================
-            // COLISIÓN MUNDO (rb.Cast)
-            // =========================
-            var cfWall = new ContactFilter2D();
-            cfWall.useLayerMask = true;
-            cfWall.layerMask = dashCollisionMask;
-            cfWall.useTriggers = false;
-
-            int hitCount = rb.Cast(dir, cfWall, castHits, remaining + dashSkin);
-
-            RaycastHit2D hit = default;
-            bool hasHit = false;
-            float best = float.MaxValue;
-
-            for (int i = 0; i < hitCount; i++)
-            {
-                var h = castHits[i];
-                if (h.collider == null) continue;
-                if (h.collider.isTrigger) continue;
-
-                if (h.distance < best)
+                if (PickupUsable(pickup))
                 {
-                    best = h.distance;
-                    hit = h;
-                    hasHit = true;
+                    Vector2 anchor = pickup.GetAnchorWorld();
+
+                    AbortDashToPickup();
+
+                    Vector2 targetPos = snapToPickupAnchorOnDash
+                        ? anchor
+                        : (pos + dir * Mathf.Max(0f, pickupDist - dashSkin));
+
+                    rb.position = targetPos;
+
+                    rb.linearVelocity = Vector2.zero;
+                    rb.angularVelocity = 0f;
+
+                    pickup.Consume();
+
+                    NotifyPickupBounce();
+                    ActivateSpark(pickup.windowDuration, anchor);
+                    return;
                 }
             }
 
-            if (!hasHit)
+            if (!CastWallsFrom(pos, dir, remaining + dashSkin, out RaycastHit2D hit))
             {
                 pos += dir * remaining;
                 remaining = 0f;
@@ -553,39 +867,65 @@ public class PlayerSparkBoost : MonoBehaviour
 
             float travel = Mathf.Max(0f, hit.distance - dashSkin);
 
-            // si está demasiado cerca, fuerza avance mínimo para no colapsar el rebote
-            if (travel < 0.005f)
-                travel = 0.02f;
+            if (travel <= 0.0001f)
+            {
+                if (!dashBouncesOnWalls || dashBouncesUsed >= dashMaxBounces)
+                {
+                    remaining = 0f;
+                    break;
+                }
 
-            pos += dir * travel;
-            remaining -= travel;
+                dir = Vector2.Reflect(dir, hit.normal).normalized;
+                dashBouncesUsed++;
 
-            if (!dashBouncesOnWalls || bounces >= dashMaxBounces)
+                float microPush = Mathf.Max(0.0025f, dashSkin);
+                float pushed = Mathf.Min(microPush, remaining);
+                pos += dir * pushed;
+                remaining -= pushed;
+
+                continue;
+            }
+
+            float movedToHit = Mathf.Min(travel, remaining);
+            pos += dir * movedToHit;
+            remaining -= movedToHit;
+
+            if (remaining <= 0f)
+                break;
+
+            if (!dashBouncesOnWalls || dashBouncesUsed >= dashMaxBounces)
             {
                 remaining = 0f;
                 break;
             }
 
             dir = Vector2.Reflect(dir, hit.normal).normalized;
-            bounces++;
+            dashBouncesUsed++;
 
-            // micro push para no quedarnos pegados
-            pos += dir * 0.01f;
-
-            // OJO: al cambiar de dirección, la búsqueda de pickup ya no vale
-            pickup = null;
+            float nudge = Mathf.Max(0.0025f, dashSkin);
+            float nudged = Mathf.Min(nudge, remaining);
+            pos += dir * nudged;
+            remaining -= nudged;
         }
 
         rb.position = pos;
         dashDir = dir;
 
-        // Defensa dura otra vez
         rb.linearVelocity = Vector2.zero;
         rb.angularVelocity = 0f;
 
-        // ======= FIN por distancia (NO por timer) =======
-        dashRemainingDist -= step;
-        if (dashRemainingDist <= 0f)
+        // ---- CLAVE: consumir distancia REAL movida ----
+        float movedReal = Vector2.Distance(startPos, pos);
+        dashRemainingDist -= movedReal;
+
+        // Si no te has movido nada, estás encajado: corta ya
+        if (movedReal <= 0.00001f)
+        {
+            EndDash();
+            return;
+        }
+
+        if (dashRemainingDist <= 0.0001f)
         {
             EndDash();
             return;
@@ -594,6 +934,11 @@ public class PlayerSparkBoost : MonoBehaviour
 
     private void AbortDashToPickup()
     {
+        EnableDashTrail(false);
+
+        // if (debug && debugFrozenDashTrail)
+        //     DebugEndFrozenTrail();
+
         dashActive = false;
         dashTimer = 0f;
         dashRemainingDist = 0f;
@@ -619,19 +964,24 @@ public class PlayerSparkBoost : MonoBehaviour
             dashBackedBodyType = false;
         }
 
-        // CLAVE: el dash puso esto en true; suéltalo aquí sí o sí.
         move.movementLocked = false;
+        cachedMoveLockValid = false;
+        cachedMoveLockValue = false;
 
         rb.linearVelocity = Vector2.zero;
         rb.angularVelocity = 0f;
+
+        HardRestoreRigidbodyBaseline();
+        DisableBounceAttackHard();
     }
-
-
-
-
 
     private void EndDash()
     {
+        EnableDashTrail(false);
+
+        // if (debug && debugFrozenDashTrail)
+        //     DebugEndFrozenTrail();
+
         dashActive = false;
         dashTimer = 0f;
 
@@ -654,12 +1004,18 @@ public class PlayerSparkBoost : MonoBehaviour
             dashBackedBodyType = false;
         }
 
+        rb.linearVelocity = Vector2.zero;
+        rb.angularVelocity = 0f;
 
         RestoreMovementLock();
         aimLocked = false;
 
-    }
+        HardRestoreRigidbodyBaseline();
 
+        RestoreBounceAttackIfNeeded();
+
+        forceUnlockOnSparkExit = false;
+    }
 
     private void EndSparkWindow()
     {
@@ -670,25 +1026,54 @@ public class PlayerSparkBoost : MonoBehaviour
 
         SetPreviewVisible(false);
         SetRingVisible(false);
+
+        rb.linearVelocity = Vector2.zero;
+        rb.angularVelocity = 0f;
+
+        HardRestoreRigidbodyBaseline();
+
+        if (forceUnlockOnSparkExit)
+        {
+            StartResidualAbsorbIfNeeded();
+            ScheduleBounceRestoreDeferred();
+        }
+        else
+        {
+            RestoreBounceAttackIfNeeded();
+        }
     }
 
     private void RestoreMovementLock()
     {
+        if (forceUnlockOnSparkExit)
+        {
+            move.movementLocked = false;
+            cachedMoveLockValid = false;
+            forceUnlockOnSparkExit = false;
+            aimLocked = false;
+            return;
+        }
+
         if (cachedMoveLockValid)
         {
+            move.movementLocked = cachedMoveLockValue;
             cachedMoveLockValid = false;
-            RestoreMovementLock();
-            aimLocked = false;
-
         }
         else
         {
             move.movementLocked = false;
         }
+
+        aimLocked = false;
     }
 
     private void ForceEndAll()
     {
+        EnableDashTrail(false);
+
+        if (debug && debugFrozenDashTrail)
+            DebugEndFrozenTrail();
+
         sparkActive = false;
         dashActive = false;
 
@@ -701,34 +1086,41 @@ public class PlayerSparkBoost : MonoBehaviour
 
         SetPreviewVisible(false);
         SetRingVisible(false);
+        SetPickupCircleVisible(false);
 
-        RestoreMovementLock();
-        RestoreRigidbodyStateIfNeeded();
-
-        if (dashBackedState)
-        {
-            rb.gravityScale = dashPrevGravity;
-            rb.interpolation = dashPrevInterp;
-            dashBackedState = false;
-        }
-
-
-        if (dashBackedConstraints)
-        {
-            rb.constraints = dashPrevConstraints;
-            dashBackedConstraints = false;
-        }
-
-        if (dashBackedBodyType)
-        {
-            rb.bodyType = dashPrevBodyType;
-            dashBackedBodyType = false;
-        }
+        cachedMoveLockValid = false;
+        cachedMoveLockValue = false;
+        move.movementLocked = false;
 
         aimLocked = false;
 
+        forceUnlockOnSparkExit = false;
+
+        residualAbsorbFramesLeft = 0;
+        residualAbsorbUntilTime = -1f;
+
+        pendingRestoreBounce = false;
+        pendingRestoreBounceUntil = -1f;
+
+        postRestoreGuardActive = false;
+        postRestoreGuardUntil = -1f;
+
+        rb.linearVelocity = Vector2.zero;
+        rb.angularVelocity = 0f;
+
+        HardRestoreRigidbodyBaseline();
+
+        if (bounceAtkHadComponent && bounceAtk != null && bounceAtkStateCached)
+        {
+            SendBounceHardResets();
+            bounceAtk.enabled = bounceAtkWasEnabled;
+            bounceAtkStateCached = false;
+        }
     }
 
+    // =========================
+    // Aim
+    // =========================
     private Vector2 GetAimDirection8()
     {
         if (dashActive && aimLocked)
@@ -753,6 +1145,9 @@ public class PlayerSparkBoost : MonoBehaviour
         return v;
     }
 
+    // =========================
+    // Timing helpers
+    // =========================
     private float ComputeMultiplier(float progress)
     {
         if (!continuousTiming)
@@ -774,9 +1169,8 @@ public class PlayerSparkBoost : MonoBehaviour
     }
 
     // =========================
-    // PREVIEW: Trayectoria rebotes
+    // PREVIEW (live) - CONFIG
     // =========================
-
     private void ConfigurePreviewAuto()
     {
         if (sparkPreviewLine == null)
@@ -788,21 +1182,21 @@ public class PlayerSparkBoost : MonoBehaviour
         }
 
         sparkPreviewLine.useWorldSpace = true;
-        sparkPreviewLine.widthCurve = AnimationCurve.Constant(0f, 1f, previewWidth);
+        sparkPreviewLine.startWidth = previewWidth;
+        sparkPreviewLine.endWidth = previewWidth;
 
         Shader sh =
+            Shader.Find("Universal RenderPipeline/2D/Unlit") ??
             Shader.Find("Universal Render Pipeline/2D/Unlit") ??
             Shader.Find("Unlit/Color") ??
             Shader.Find("Sprites/Default");
 
         sparkPreviewLine.material = new Material(sh);
-
         sparkPreviewLine.sortingLayerName = previewSortingLayer;
         sparkPreviewLine.sortingOrder = previewSortingOrder;
 
         sparkPreviewLine.numCapVertices = 4;
         sparkPreviewLine.numCornerVertices = 2;
-
         sparkPreviewLine.positionCount = 0;
         sparkPreviewLine.enabled = false;
     }
@@ -810,10 +1204,72 @@ public class PlayerSparkBoost : MonoBehaviour
     private void SetPreviewVisible(bool on)
     {
         if (sparkPreviewLine == null) return;
+
         sparkPreviewLine.enabled = on;
         if (!on) sparkPreviewLine.positionCount = 0;
+
+        SetPickupCircleVisible(on && previewMarkNextPickup);
+        if (!on) SetPickupCircleVisible(false);
     }
 
+    // ==========================================================
+    // PREVIEW SOBRE EL BORDE DEL COLLIDER (NO CENTRO) - CON ESCALA REAL
+    // ==========================================================
+    private Vector2 GetColliderSupportOffset(Vector2 dir)
+    {
+        Vector2 d = dir;
+        if (d.sqrMagnitude < 0.000001f) d = Vector2.up;
+        d.Normalize();
+
+        if (boxCol != null)
+        {
+            Vector2 sizeW = ScaleSize(boxCol.size);
+            Vector2 offW = ScaleOffset(boxCol.offset);
+
+            Vector2 e = sizeW * 0.5f;
+            return offW + new Vector2(Mathf.Sign(d.x) * e.x, Mathf.Sign(d.y) * e.y);
+        }
+
+        if (circleCol != null)
+        {
+            Vector2 offW = ScaleOffset(circleCol.offset);
+            float rW = ScaleRadius(circleCol.radius);
+            return offW + d * rW;
+        }
+
+        if (capsuleCol != null)
+        {
+            Vector2 sizeW = ScaleSize(capsuleCol.size);
+            Vector2 offW = ScaleOffset(capsuleCol.offset);
+
+            if (capsuleCol.direction == CapsuleDirection2D.Vertical)
+            {
+                float r = sizeW.x * 0.5f;
+                float coreY = Mathf.Max(0f, (sizeW.y * 0.5f) - r);
+                Vector2 coreExt = new Vector2(r, coreY);
+
+                Vector2 supportCore = new Vector2(Mathf.Sign(d.x) * coreExt.x, Mathf.Sign(d.y) * coreExt.y);
+                return offW + supportCore + d * r;
+            }
+            else
+            {
+                float r = sizeW.y * 0.5f;
+                float coreX = Mathf.Max(0f, (sizeW.x * 0.5f) - r);
+                Vector2 coreExt = new Vector2(coreX, r);
+
+                Vector2 supportCore = new Vector2(Mathf.Sign(d.x) * coreExt.x, Mathf.Sign(d.y) * coreExt.y);
+                return offW + supportCore + d * r;
+            }
+        }
+
+        Bounds b = playerCol.bounds;
+        Vector2 ext = b.extents;
+        return new Vector2(Mathf.Sign(d.x) * ext.x, Mathf.Sign(d.y) * ext.y);
+    }
+
+    // =========================
+    // PREVIEW (live)
+    // =========================
     private void UpdatePreviewWithBounces()
     {
         if (sparkPreviewLine == null || !sparkActive || sparkTimerTotal <= 0f) return;
@@ -822,94 +1278,185 @@ public class PlayerSparkBoost : MonoBehaviour
         float mult = ComputeMultiplier(progress);
         Color c = ComputePhaseColor(progress);
 
-        Vector2 dir = GetAimDirection8();
-        if (dir.sqrMagnitude < 0.0001f) dir = Vector2.up;
-        dir.Normalize();
+        Vector2 dir0 = GetAimDirection8();
+        if (dir0.sqrMagnitude < 0.0001f) dir0 = Vector2.up;
+        dir0.Normalize();
 
-        // Distancia total que recorrerá el dash (misma lógica conceptual que el movimiento)
-        float totalDist = (dashSpeed * mult) * Mathf.Max(0.01f, dashDuration);
+        float scale = Mathf.Clamp(dashDistanceScale, 0.5f, 1f);
 
-        Vector2 pos = rb.position;
-        float remaining = totalDist;
-        int bounces = 0;
+        float dashSpeedFinalPreview = dashSpeed * mult;
+        float totalDist = dashSpeedFinalPreview * Mathf.Max(0.01f, dashDuration) * scale;
 
-        var pts = new List<Vector3>(previewSegments + 2) { pos };
+        float safeMul = Mathf.Clamp(previewSafetyMultiplier, 0.10f, 1.00f);
+        totalDist *= safeMul;
 
-        // Cast SOLO contra mundo (NO triggers), usando el mismo mask del dash
-        var cfWall = new ContactFilter2D();
-        cfWall.useLayerMask = true;
-        cfWall.layerMask = dashCollisionMask;
-        cfWall.useTriggers = false;
+        SetPickupCircleVisible(false);
 
-        // Recorremos como el dash: consumir "remaining" con rebotes reales
-        while (remaining > 0f && bounces <= previewMaxBounces && pts.Count < (previewSegments + 2))
+        Vector2 simPos = rb.position;
+        Vector2 simDir = dir0;
+
+        float distLeft = totalDist;
+
+        int maxBounces = dashBouncesOnWalls ? dashMaxBounces : 0;
+        int simBounces = 0;
+
+        var centerPts = new List<Vector2>(previewSegments + 16) { simPos };
+        var dirPts = new List<Vector2>(previewSegments + 16) { simDir };
+
+        float dt = Mathf.Max(0.0005f, Time.fixedDeltaTime);
+
+        int safetyTicks = 0;
+        const int SAFETY_TICKS_MAX = 512;
+
+        while (distLeft > 0.00001f && safetyTicks++ < SAFETY_TICKS_MAX)
         {
-            int hitCount = rb.Cast(dir, cfWall, castHits, remaining + dashSkin);
+            float step = Mathf.Min(distLeft, dashSpeedFinalPreview * dt);
+            float remaining = step;
 
-            RaycastHit2D hit = default;
-            bool hasHit = false;
-            float best = float.MaxValue;
+            int safety = 0;
+            const int SAFETY_MAX = 32;
 
-            for (int i = 0; i < hitCount; i++)
+            while (remaining > 0f && safety++ < SAFETY_MAX)
             {
-                var h = castHits[i];
-                if (h.collider == null) continue;
-                if (h.collider.isTrigger) continue;
-                if (h.distance < best)
+                if (previewMarkNextPickup)
                 {
-                    best = h.distance;
-                    hit = h;
-                    hasHit = true;
+                    FlameSparkPickup pickup = null;
+                    float pickupDist = float.MaxValue;
+
+                    float castDist = remaining + dashSkin + pickupSweepExtra;
+                    TryFindPickupAlong(simPos, simDir, castDist, out pickup, out pickupDist);
+
+                    if (pickup != null && pickupDist <= remaining + dashSkin)
+                    {
+                        float travelToPickup = Mathf.Max(0f, pickupDist - dashSkin);
+                        float moved = Mathf.Min(travelToPickup, remaining);
+
+                        simPos += simDir * moved;
+                        centerPts.Add(simPos);
+                        dirPts.Add(simDir);
+
+                        Vector2 anchor = pickup.GetAnchorWorld();
+                        SetPickupCircleVisible(true);
+                        DrawPickupCircle(anchor, pickupCircleRadius, c);
+
+                        distLeft = 0f;
+                        remaining = 0f;
+                        break;
+                    }
                 }
+
+                if (!CastWallsFrom(simPos, simDir, remaining + dashSkin, out RaycastHit2D hit))
+                {
+                    simPos += simDir * remaining;
+                    remaining = 0f;
+
+                    centerPts.Add(simPos);
+                    dirPts.Add(simDir);
+                    break;
+                }
+
+                float travel = Mathf.Max(0f, hit.distance - dashSkin);
+
+                if (travel <= 0.0001f)
+                {
+                    if (!dashBouncesOnWalls || simBounces >= maxBounces)
+                    {
+                        remaining = 0f;
+                        distLeft = 0f;
+                        centerPts.Add(simPos);
+                        dirPts.Add(simDir);
+                        break;
+                    }
+
+                    simDir = Vector2.Reflect(simDir, hit.normal).normalized;
+                    simBounces++;
+
+                    float microPush = Mathf.Max(0.0025f, dashSkin);
+                    float pushed = Mathf.Min(microPush, remaining);
+                    simPos += simDir * pushed;
+                    remaining -= pushed;
+
+                    centerPts.Add(simPos);
+                    dirPts.Add(simDir);
+                    continue;
+                }
+
+                float movedToHit = Mathf.Min(travel, remaining);
+                simPos += simDir * movedToHit;
+                remaining -= movedToHit;
+
+                centerPts.Add(simPos);
+                dirPts.Add(simDir);
+
+                if (remaining <= 0f) break;
+
+                if (!dashBouncesOnWalls || simBounces >= maxBounces)
+                {
+                    remaining = 0f;
+                    distLeft = 0f;
+                    break;
+                }
+
+                simDir = Vector2.Reflect(simDir, hit.normal).normalized;
+                simBounces++;
+
+                float nudge = Mathf.Max(0.0025f, dashSkin);
+                float nudged = Mathf.Min(nudge, remaining);
+                simPos += simDir * nudged;
+                remaining -= nudged;
+
+                centerPts.Add(simPos);
+                dirPts.Add(simDir);
             }
 
-            if (!hasHit)
-            {
-                // No hay colisión: recta final completa
-                pos += dir * remaining;
-                pts.Add(pos);
-                remaining = 0f;
-                break;
-            }
-
-            // Viaje hasta el impacto (skin)
-            float travel = Mathf.Max(0f, hit.distance - dashSkin);
-
-            // Si el impacto está pegado, forzamos avance mínimo para que el rebote se vea
-            if (travel < 0.005f)
-                travel = 0.02f;
-
-            // Nos movemos al punto de impacto
-            pos += dir * travel;
-            pts.Add(pos);
-
-            remaining -= travel;
-            if (remaining <= 0f) break;
-
-            if (!dashBouncesOnWalls) break;
-
-            // Rebote real
-            dir = Vector2.Reflect(dir, hit.normal).normalized;
-            bounces++;
-
-            // Micro push para no quedarnos “pegados” a la pared en preview
-            pos += dir * 0.01f;
-            pts.Add(pos);
+            distLeft -= step;
         }
 
-        sparkPreviewLine.positionCount = pts.Count;
-        sparkPreviewLine.SetPositions(pts.ToArray());
+        if (centerPts.Count < 2)
+        {
+            centerPts.Add(centerPts[0]);
+            dirPts.Add(dir0);
+        }
+
+        int nPts = centerPts.Count;
+        var renderPts = new Vector3[nPts];
+
+        for (int i = 0; i < nPts; i++)
+            renderPts[i] = centerPts[i];
+
+        renderPts[0] = (Vector3)(centerPts[0] + GetColliderSupportOffset(dir0));
+
+        Vector2 finalDir = dirPts[dirPts.Count - 1];
+        if (finalDir.sqrMagnitude < 0.000001f) finalDir = dir0;
+        renderPts[nPts - 1] = (Vector3)(centerPts[nPts - 1] + GetColliderSupportOffset(finalDir));
+
+        int maxPts = Mathf.Max(4, previewSegments + 2);
+        if (renderPts.Length > maxPts)
+        {
+            var dec = new Vector3[maxPts];
+            dec[0] = renderPts[0];
+            dec[maxPts - 1] = renderPts[renderPts.Length - 1];
+
+            float stepIdx = (renderPts.Length - 1) / (float)(maxPts - 1);
+            for (int i = 1; i < maxPts - 1; i++)
+            {
+                int idx = Mathf.Clamp(Mathf.RoundToInt(i * stepIdx), 1, renderPts.Length - 2);
+                dec[i] = renderPts[idx];
+            }
+            renderPts = dec;
+        }
+
+        sparkPreviewLine.positionCount = renderPts.Length;
+        sparkPreviewLine.SetPositions(renderPts);
 
         sparkPreviewLine.startColor = c;
         sparkPreviewLine.endColor = c;
         if (sparkPreviewLine.material != null) sparkPreviewLine.material.color = c;
     }
 
-
     // =========================
-    // RING: arco de tiempo
+    // RING
     // =========================
-
     private void ConfigureRingAuto()
     {
         if (sparkRingLine == null)
@@ -921,21 +1468,21 @@ public class PlayerSparkBoost : MonoBehaviour
         }
 
         sparkRingLine.useWorldSpace = true;
-        sparkRingLine.widthCurve = AnimationCurve.Constant(0f, 1f, ringWidth);
+        sparkRingLine.startWidth = ringWidth;
+        sparkRingLine.endWidth = ringWidth;
 
         Shader sh =
+            Shader.Find("Universal RenderPipeline/2D/Unlit") ??
             Shader.Find("Universal Render Pipeline/2D/Unlit") ??
             Shader.Find("Unlit/Color") ??
             Shader.Find("Sprites/Default");
 
         sparkRingLine.material = new Material(sh);
-
         sparkRingLine.sortingLayerName = ringSortingLayer;
         sparkRingLine.sortingOrder = ringSortingOrder;
 
         sparkRingLine.numCapVertices = 4;
         sparkRingLine.numCornerVertices = 2;
-
         sparkRingLine.positionCount = 0;
         sparkRingLine.enabled = false;
     }
@@ -986,9 +1533,72 @@ public class PlayerSparkBoost : MonoBehaviour
     }
 
     // =========================
-    // RB freeze / restore
+    // Wall cast FROM SIMULATED POSITION (CON ESCALA REAL)
     // =========================
+    private bool CastWallsFrom(Vector2 originPos, Vector2 dir, float dist, out RaycastHit2D bestHit)
+    {
+        bestHit = default;
 
+        var cfWall = new ContactFilter2D();
+        cfWall.useLayerMask = true;
+        cfWall.layerMask = dashCollisionMask;
+        cfWall.useTriggers = false;
+
+        int count = 0;
+
+        if (boxCol != null)
+        {
+            Vector2 center = originPos + ScaleOffset(boxCol.offset);
+            Vector2 sizeW = ScaleSize(boxCol.size);
+            count = Physics2D.BoxCast(center, sizeW, 0f, dir, cfWall, castHits, dist);
+        }
+        else if (capsuleCol != null)
+        {
+            Vector2 center = originPos + ScaleOffset(capsuleCol.offset);
+            Vector2 sizeW = ScaleSize(capsuleCol.size);
+            CapsuleDirection2D capDir = capsuleCol.direction;
+            count = Physics2D.CapsuleCast(center, sizeW, capDir, 0f, dir, cfWall, castHits, dist);
+        }
+        else if (circleCol != null)
+        {
+            Vector2 center = originPos + ScaleOffset(circleCol.offset);
+            float rW = ScaleRadius(circleCol.radius);
+            count = Physics2D.CircleCast(center, rW, dir, cfWall, castHits, dist);
+        }
+        else
+        {
+            Bounds b = playerCol.bounds;
+            Vector2 center = originPos + (Vector2)(b.center - (Vector3)rb.position);
+            Vector2 size = b.size;
+            count = Physics2D.BoxCast(center, size, 0f, dir, cfWall, castHits, dist);
+        }
+
+        if (count <= 0) return false;
+
+        float best = float.MaxValue;
+        bool has = false;
+
+        for (int i = 0; i < count; i++)
+        {
+            var h = castHits[i];
+            if (h.collider == null) continue;
+            if (h.collider.isTrigger) continue;
+            if (h.collider == playerCol) continue;
+
+            if (h.distance < best)
+            {
+                best = h.distance;
+                bestHit = h;
+                has = true;
+            }
+        }
+
+        return has;
+    }
+
+    // =========================
+    // RB state
+    // =========================
     private void EnsureRigidbodyAnchoredState()
     {
         if (!rbStateBackedUp)
@@ -999,69 +1609,303 @@ public class PlayerSparkBoost : MonoBehaviour
             rbStateBackedUp = true;
         }
 
+        rb.bodyType = RigidbodyType2D.Dynamic;
         rb.gravityScale = 0f;
         rb.interpolation = RigidbodyInterpolation2D.None;
         rb.constraints = RigidbodyConstraints2D.FreezeAll;
     }
 
-    private void RestoreRigidbodyStateIfNeeded()
+    private void HardRestoreRigidbodyBaseline()
     {
-        if (!rbStateBackedUp) return;
+        if (rbStateBackedUp)
+        {
+            rb.gravityScale = prevGravity;
+            rb.interpolation = prevInterp;
+            rb.constraints = prevConstraints;
+            rbStateBackedUp = false;
+        }
 
-        rb.gravityScale = prevGravity;
-        rb.interpolation = prevInterp;
-        rb.constraints = prevConstraints;
+        rb.bodyType = baseBodyType;
+        rb.gravityScale = baseGravity;
+        rb.interpolation = baseInterp;
+        rb.constraints = baseConstraints;
 
-        rbStateBackedUp = false;
+        rb.angularVelocity = 0f;
     }
 
-    private void DebugAimSample(string tag)
+    // =========================
+    // DEBUG - Dash Trail (ephemeral TrailRenderer)
+    // =========================
+    private void SetupDashTrail()
     {
-        if (!debug || !debugAim) return;
+        if (!debugDashTrail) return;
 
-        // Throttle
-        if (debugLogEvery > 0f && Time.time < _debugNextLog) return;
-        _debugNextLog = Time.time + Mathf.Max(0f, debugLogEvery);
+        dashTrail = GetComponent<TrailRenderer>();
+        if (dashTrail == null) dashTrail = gameObject.AddComponent<TrailRenderer>();
 
-        float rawX = Input.GetAxisRaw("Horizontal");
-        float rawY = Input.GetAxisRaw("Vertical");
+        dashTrail.enabled = false;
+        dashTrail.emitting = false;
 
-        // Aplicamos deadzone igual que en GetAimDirection8
-        float dx = (Mathf.Abs(rawX) < aimDeadzone) ? 0f : rawX;
-        float dy = (Mathf.Abs(rawY) < aimDeadzone) ? 0f : rawY;
+        dashTrail.time = Mathf.Max(0.02f, dashTrailTime);
+        dashTrail.startWidth = Mathf.Max(0.001f, dashTrailStartWidth);
+        dashTrail.endWidth = Mathf.Max(0.001f, dashTrailEndWidth);
 
-        Vector2 raw = new Vector2(rawX, rawY);
-        Vector2 dz  = new Vector2(dx, dy);
+        Shader sh =
+            Shader.Find("Universal RenderPipeline/2D/Unlit") ??
+            Shader.Find("Universal Render Pipeline/2D/Unlit") ??
+            Shader.Find("Unlit/Color") ??
+            Shader.Find("Sprites/Default");
 
-        // Cuantización 8-dir igual que tu GetAimDirection8
-        Vector2 q;
-        if (dz.sqrMagnitude < 0.0001f)
+        dashTrail.material = new Material(sh);
+
+        var grad = new Gradient();
+        grad.SetKeys(
+            new GradientColorKey[] { new GradientColorKey(dashTrailColor, 0f), new GradientColorKey(dashTrailColor, 1f), },
+            new GradientAlphaKey[] { new GradientAlphaKey(dashTrailColor.a, 0f), new GradientAlphaKey(0f, 1f), }
+        );
+        dashTrail.colorGradient = grad;
+
+        dashTrail.sortingLayerName = dashTrailSortingLayer;
+        dashTrail.sortingOrder = dashTrailSortingOrder;
+
+        dashTrail.minVertexDistance = 0.02f;
+        dashTrail.Clear();
+    }
+
+    private void EnableDashTrail(bool on)
+    {
+        if (!debugDashTrail || dashTrail == null) return;
+
+        if (on)
         {
-            q = keepLastAimWhenNoInput ? lastAim : Vector2.up;
-        }
-        else if (dx != 0f && dy != 0f)
-        {
-            q = new Vector2(Mathf.Sign(dx), Mathf.Sign(dy)).normalized;
+            dashTrail.time = Mathf.Max(0.02f, dashTrailTime);
+            dashTrail.Clear();
+            dashTrail.enabled = true;
+            dashTrail.emitting = true;
         }
         else
         {
-            q = (dx != 0f) ? new Vector2(Mathf.Sign(dx), 0f) : new Vector2(0f, Mathf.Sign(dy));
+            dashTrail.emitting = false;
+            dashTrail.enabled = false;
+            dashTrail.Clear();
         }
-
-        Vector2 locked = aimLocked ? aimLockedDir : Vector2.zero;
-
-        Debug.Log(
-            $"[AIM {tag}] raw=({rawX:0.00},{rawY:0.00}) dz=({dx:0.00},{dy:0.00}) " +
-            $"q=({q.x:0.00},{q.y:0.00}) last=({lastAim.x:0.00},{lastAim.y:0.00}) " +
-            $"aimLocked={aimLocked} locked=({locked.x:0.00},{locked.y:0.00}) dashDir=({dashDir.x:0.00},{dashDir.y:0.00})"
-        );
-
-        // RAYs EN ESCENA
-        Vector3 p = rb.position;
-        Debug.DrawRay(p, (Vector3)(q.normalized * debugRayLength), Color.green, debugLogEvery > 0f ? debugLogEvery : 0f);
-        if (aimLocked)
-            Debug.DrawRay(p, (Vector3)(aimLockedDir.normalized * debugRayLength), Color.red, debugLogEvery > 0f ? debugLogEvery : 0f);
     }
 
-}
+    // =========================
+    // Pickup Circle
+    // =========================
+    private void ConfigurePickupCircleAuto()
+    {
+        if (pickupPreviewCircle == null)
+        {
+            var go = new GameObject("PickupPreviewCircle");
+            go.transform.SetParent(transform);
+            go.transform.localPosition = Vector3.zero;
+            pickupPreviewCircle = go.AddComponent<LineRenderer>();
+        }
 
+        pickupPreviewCircle.useWorldSpace = true;
+        pickupPreviewCircle.startWidth = pickupCircleWidth;
+        pickupPreviewCircle.endWidth = pickupCircleWidth;
+
+        Shader sh =
+            Shader.Find("Universal RenderPipeline/2D/Unlit") ??
+            Shader.Find("Universal Render Pipeline/2D/Unlit") ??
+            Shader.Find("Unlit/Color") ??
+            Shader.Find("Sprites/Default");
+
+        pickupPreviewCircle.material = new Material(sh);
+        pickupPreviewCircle.sortingLayerName = pickupCircleSortingLayer;
+        pickupPreviewCircle.sortingOrder = pickupCircleSortingOrder;
+
+        pickupPreviewCircle.numCapVertices = 4;
+        pickupPreviewCircle.numCornerVertices = 2;
+
+        pickupPreviewCircle.positionCount = 0;
+        pickupPreviewCircle.loop = true;
+        pickupPreviewCircle.enabled = false;
+    }
+
+    private void SetPickupCircleVisible(bool on)
+    {
+        if (pickupPreviewCircle == null) return;
+        pickupPreviewCircle.enabled = on;
+        if (!on) pickupPreviewCircle.positionCount = 0;
+    }
+
+    private void DrawPickupCircle(Vector2 center, float radius, Color c)
+    {
+        if (pickupPreviewCircle == null) return;
+
+        int segs = Mathf.Max(8, pickupCircleSegments);
+        var pts = new Vector3[segs];
+
+        for (int i = 0; i < segs; i++)
+        {
+            float a = (i / (float)segs) * Mathf.PI * 2f;
+            pts[i] = center + new Vector2(Mathf.Cos(a), Mathf.Sin(a)) * radius;
+        }
+
+        pickupPreviewCircle.positionCount = pts.Length;
+        pickupPreviewCircle.SetPositions(pts);
+
+        pickupPreviewCircle.startColor = c;
+        pickupPreviewCircle.endColor = c;
+        if (pickupPreviewCircle.material != null) pickupPreviewCircle.material.color = c;
+    }
+
+    // =========================
+    // DEBUG - Frozen Preview (permanent)
+    // =========================
+    private void EnsureFrozenLine()
+    {
+        if (frozenPreviewLine != null) return;
+
+        var go = new GameObject("FrozenSparkPreviewLine");
+        go.transform.SetParent(null);
+
+        frozenPreviewLine = go.AddComponent<LineRenderer>();
+        frozenPreviewLine.useWorldSpace = true;
+        frozenPreviewLine.startWidth = frozenLineWidth;
+        frozenPreviewLine.endWidth = frozenLineWidth;
+
+        Shader sh =
+            Shader.Find("Universal RenderPipeline/2D/Unlit") ??
+            Shader.Find("Universal Render Pipeline/2D/Unlit") ??
+            Shader.Find("Unlit/Color") ??
+            Shader.Find("Sprites/Default");
+
+        frozenPreviewLine.material = new Material(sh);
+        frozenPreviewLine.sortingLayerName = previewSortingLayer;
+        frozenPreviewLine.sortingOrder = frozenLineSortingOrder;
+
+        frozenPreviewLine.numCapVertices = 4;
+        frozenPreviewLine.numCornerVertices = 2;
+        frozenPreviewLine.positionCount = 0;
+        frozenPreviewLine.enabled = false;
+    }
+
+    private void DebugFreezeCurrentPreview(Color c)
+    {
+        if (sparkPreviewLine == null) return;
+        if (sparkPreviewLine.positionCount < 2) return;
+
+        EnsureFrozenLine();
+
+        int n = sparkPreviewLine.positionCount;
+        var pts = new Vector3[n];
+        sparkPreviewLine.GetPositions(pts);
+
+        frozenPreviewLine.positionCount = n;
+        frozenPreviewLine.SetPositions(pts);
+
+        frozenPreviewLine.startColor = c;
+        frozenPreviewLine.endColor = c;
+        if (frozenPreviewLine.material != null) frozenPreviewLine.material.color = c;
+
+        frozenPreviewLine.enabled = true;
+        frozenHasData = true;
+    }
+
+    private void DebugClearFrozenPreview()
+    {
+        if (frozenPreviewLine == null) return;
+        frozenPreviewLine.positionCount = 0;
+        frozenPreviewLine.enabled = false;
+        frozenHasData = false;
+    }
+
+    // =========================
+    // DEBUG - Frozen Real Trail (permanent)
+    // =========================
+    private void EnsureFrozenTrailLine()
+    {
+        if (frozenTrailLine != null) return;
+
+        var go = new GameObject("FrozenDashTrailLine");
+        go.transform.SetParent(null);
+
+        frozenTrailLine = go.AddComponent<LineRenderer>();
+        frozenTrailLine.useWorldSpace = true;
+        frozenTrailLine.startWidth = frozenTrailWidth;
+        frozenTrailLine.endWidth = frozenTrailWidth;
+
+        Shader sh =
+            Shader.Find("Universal RenderPipeline/2D/Unlit") ??
+            Shader.Find("Universal Render Pipeline/2D/Unlit") ??
+            Shader.Find("Unlit/Color") ??
+            Shader.Find("Sprites/Default");
+
+        frozenTrailLine.material = new Material(sh);
+        frozenTrailLine.sortingLayerName = dashTrailSortingLayer;
+        frozenTrailLine.sortingOrder = frozenTrailSortingOrder;
+
+        frozenTrailLine.numCapVertices = 4;
+        frozenTrailLine.numCornerVertices = 2;
+        frozenTrailLine.positionCount = 0;
+        frozenTrailLine.enabled = true;
+    }
+
+    private void DebugStartFrozenTrail(Color c)
+    {
+        EnsureFrozenTrailLine();
+
+        frozenTrailPts.Clear();
+        Vector2 d0 = dashDir.sqrMagnitude > 0.0001f ? dashDir : Vector2.up;
+        Vector2 edge = (Vector2)rb.position + GetColliderSupportOffset(d0);
+
+        Vector3 p = edge;
+
+        frozenTrailPts.Add(p);
+        lastFrozenTrailPt = p;
+
+        frozenTrailLine.startColor = c;
+        frozenTrailLine.endColor = c;
+        if (frozenTrailLine.material != null) frozenTrailLine.material.color = c;
+
+        frozenTrailLine.positionCount = 1;
+        frozenTrailLine.SetPosition(0, p);
+
+        frozenTrailRecording = true;
+    }
+
+    private void DebugAddFrozenTrailPoint(bool force = false)
+    {
+        if (!frozenTrailRecording) return;
+
+        Vector2 d = dashDir.sqrMagnitude > 0.0001f ? dashDir : Vector2.up;
+        Vector2 edge = (Vector2)rb.position + GetColliderSupportOffset(d);
+        Vector3 p = edge;
+
+        float minStepSqr = frozenTrailMinStep * frozenTrailMinStep;
+
+        if (!force && (p - lastFrozenTrailPt).sqrMagnitude < minStepSqr)
+            return;
+
+        lastFrozenTrailPt = p;
+
+        if (frozenTrailPts.Count >= frozenTrailMaxPoints)
+            return;
+
+        frozenTrailPts.Add(p);
+        frozenTrailLine.positionCount = frozenTrailPts.Count;
+        frozenTrailLine.SetPositions(frozenTrailPts.ToArray());
+    }
+
+    private void DebugEndFrozenTrail()
+    {
+        frozenTrailRecording = false;
+    }
+
+    private void DebugClearFrozenTrail()
+    {
+        frozenTrailPts.Clear();
+        frozenTrailRecording = false;
+
+        if (frozenTrailLine != null)
+        {
+            frozenTrailLine.positionCount = 0;
+            frozenTrailLine.enabled = true;
+        }
+    }
+}
