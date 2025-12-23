@@ -47,7 +47,6 @@ public class PlayerBounceAttack : MonoBehaviour
     public LayerMask bounceLayers;
     public float skin = 0.02f;
 
-    
     [Header("Daño")]
     public int bounceDamage = 20;
 
@@ -77,14 +76,14 @@ public class PlayerBounceAttack : MonoBehaviour
     private float fixedStepSize = 0f;
     private float ballRadius = 0f;
 
-    // Posición al entrar en modo apuntado
     private Vector2 aimStartPosition;
 
     private PlayerSparkBoost spark;
 
+    private readonly HashSet<Collider2D> impactedThisBounce = new HashSet<Collider2D>();
+
     public bool IsAiming => isAiming;
     public bool IsBouncing => isBouncing;
-
 
     private void Awake()
     {
@@ -103,19 +102,11 @@ public class PlayerBounceAttack : MonoBehaviour
 
     private void Update()
     {
-        // =======================
-        // BLOQUEO TOTAL POR SPARK
-        // =======================
         if (spark != null && (spark.IsSparkActive() || spark.IsDashing()))
         {
-            // Si estabas en aiming/bouncing, lo cortamos YA para que no toque RB ni movementLocked
             if (isAiming) EndAiming();
             if (isBouncing) EndBounce();
-
-            // Apaga preview por si acaso
             ClearPreview();
-
-            // Y no proceses input normal mientras Spark está activo
             return;
         }
 
@@ -123,11 +114,9 @@ public class PlayerBounceAttack : MonoBehaviour
         bool attackUp   = Input.GetKeyUp(attackKey)   || Input.GetKeyUp(attackPadKey);
         bool jumpDown   = Input.GetKeyDown(movement.jumpKey) || Input.GetKeyDown(KeyCode.JoystickButton0);
 
-        // Pedimos estado físico
         if (isAiming)   phys.RequestBounceAiming();
         if (isBouncing) phys.RequestBounceBouncing();
 
-        // Empezar a apuntar (SOLO si no hay Spark)
         if (!isAiming && !isBouncing && attackDown)
         {
             if (!CanStartAiming())
@@ -140,13 +129,11 @@ public class PlayerBounceAttack : MonoBehaviour
             StartAiming();
         }
 
-
         if (isAiming)
         {
             HandleAiming();
         }
 
-        // Soltar ataque = intentar iniciar bounce
         if (isAiming && attackUp)
         {
             if (aimDirection.sqrMagnitude < 0.1f)
@@ -155,7 +142,6 @@ public class PlayerBounceAttack : MonoBehaviour
             StartBounce();
         }
 
-        // Cancelar bounce con salto o re-pulsar ataque
         if (isBouncing && (jumpDown || attackDown))
         {
             EndBounce();
@@ -164,14 +150,11 @@ public class PlayerBounceAttack : MonoBehaviour
 
     private void FixedUpdate()
     {
-        // Si por lo que sea Spark entró entre Update y Fixed, no dejes que BounceAttack toque RB
         if (spark != null && (spark.IsSparkActive() || spark.IsDashing()))
             return;
 
-        // Mientras apuntas, clava al player (solo posición; NO física)
         if (isAiming)
         {
-            // Si por lo que sea se queda sin llama durante el aiming, salimos.
             if (useFlame && blockBounceIfNoFlame && flameCostStart > 0f && flame < flameCostStart)
             {
                 EndAiming();
@@ -184,7 +167,6 @@ public class PlayerBounceAttack : MonoBehaviour
 
         if (!isBouncing) return;
 
-        // -------- Suavizado de fin de trayecto --------
         float baseStep = fixedStepSize;
         float moveDist = baseStep;
 
@@ -207,13 +189,42 @@ public class PlayerBounceAttack : MonoBehaviour
             return;
         }
 
-        Vector2 origin = rb.position;
         Vector2 dir = (bounceDir.sqrMagnitude > 0.001f ? bounceDir : aimDirection).normalized;
 
-        RaycastHit2D hit = Physics2D.CircleCast(origin, ballRadius, dir, moveDist + skin, bounceLayers);
+        // ============================================================
+        // NUEVO: bucle interno "piercing" dentro del step del FixedUpdate
+        // ============================================================
+        float damagePool = bounceDamage;
+        int safety = 0;
+        const int MAX_INTERNAL_HITS = 12;
+        bool brokeSomethingThisStep = false;
 
-        if (hit.collider != null)
+
+        while (moveDist > 0f && remainingDistance > 0f && safety++ < MAX_INTERNAL_HITS)
         {
+            Vector2 origin = rb.position;
+
+            RaycastHit2D hit = Physics2D.CircleCast(origin, ballRadius, dir, moveDist + skin, bounceLayers);
+
+            if (hit.collider == null)
+            {
+                // Sin colisión: avanza libre
+                rb.MovePosition(origin + dir * moveDist);
+                remainingDistance -= moveDist;
+
+                if (useFlame && flameCostPerUnit > 0f)
+                    SpendFlame(moveDist * flameCostPerUnit);
+
+                CheckOutOfFlameAndEndIfNeeded();
+                if (!isBouncing) return;
+
+                if (remainingDistance <= 0f)
+                    EndBounce();
+
+                return;
+            }
+
+            // Hay impacto
             float travel = Mathf.Max(0f, hit.distance - skin);
 
             if (travel > 0f)
@@ -225,7 +236,40 @@ public class PlayerBounceAttack : MonoBehaviour
                     SpendFlame(travel * flameCostPerUnit);
             }
 
-            // Rebote real
+            // Consumimos el step que quedaba
+            float consumed = travel;
+            moveDist = Mathf.Max(0f, moveDist - consumed);
+
+            // Si no queda daño, a partir de aquí esto se comporta como "sólido"
+            bool broke = false;
+            float remainingDmg = 0f;
+
+            if (damagePool > 0.0001f)
+            {
+                broke = ApplyPiercingImpact(hit.collider, dir, damagePool, out remainingDmg);
+                damagePool = remainingDmg;
+            }
+
+        if (broke)
+        {
+            brokeSomethingThisStep = true;
+            rb.MovePosition(rb.position + dir * 0.02f);
+            continue;
+        }
+
+        if (brokeSomethingThisStep)
+        {
+            // Si ya rompiste algo en este step, NO hagas rebote sorpresa.
+            EndBounce();
+            return;
+        }
+
+
+
+            // =========
+            // NO SE ROMPIÓ (o no era pierceable / o no había daño):
+            // rebote normal y se acaba el step.
+            // =========
             bounceDir = Vector2.Reflect(dir, hit.normal).normalized;
 
             if (useFlame && flameCostPerBounce > 0f)
@@ -240,18 +284,50 @@ public class PlayerBounceAttack : MonoBehaviour
             return;
         }
 
-        // Sin colisión: avanza libre
-        rb.MovePosition(origin + dir * moveDist);
-        remainingDistance -= moveDist;
-
-        if (useFlame && flameCostPerUnit > 0f)
-            SpendFlame(moveDist * flameCostPerUnit);
-
+        // Si salimos del while porque se acabó el step, terminamos normal.
         CheckOutOfFlameAndEndIfNeeded();
         if (!isBouncing) return;
 
         if (remainingDistance <= 0f)
             EndBounce();
+    }
+
+    // Devuelve true si ese impacto rompió el objeto/celda.
+    private bool ApplyPiercingImpact(Collider2D col, Vector2 direction, float incomingDamage, out float remainingDamage)
+    {
+        remainingDamage = incomingDamage;
+
+        if (col == null) return false;
+
+        // Evita spamear el mismo collider mil veces si NO se rompe.
+        if (impactedThisBounce.Contains(col)) return false;
+
+        var receiverPierce = col.GetComponentInParent<IPiercingBounceReceiver>();
+        if (receiverPierce != null)
+        {
+            // OJO: en piercing, si se rompe, queremos permitir seguir, así que solo marcamos como "impactado"
+            // cuando NO se rompe.
+            var impact = new BounceImpactData((int)Mathf.Ceil(incomingDamage), direction, gameObject);
+
+            bool broke = receiverPierce.ApplyPiercingBounce(impact, incomingDamage, out float rem);
+            remainingDamage = rem;
+
+            if (!broke)
+                impactedThisBounce.Add(col);
+
+            return broke;
+        }
+
+        // Fallback: sistema antiguo sin feedback => lo tratamos como sólido (rebota)
+        var receiver = col.GetComponentInParent<IBounceImpactReceiver>();
+        if (receiver != null)
+        {
+            receiver.ReceiveBounceImpact(new BounceImpactData(bounceDamage, direction, gameObject));
+            impactedThisBounce.Add(col);
+        }
+
+        remainingDamage = 0f;
+        return false;
     }
 
     // ================== LLAMA ==================
@@ -307,7 +383,6 @@ public class PlayerBounceAttack : MonoBehaviour
 
         movement.movementLocked = true;
 
-        // Guardamos posición para “clavar” mientras apuntas
         aimStartPosition = rb.position;
 
         fixedStepSize = maxDistance / Mathf.Max(1, previewSegments);
@@ -333,7 +408,6 @@ public class PlayerBounceAttack : MonoBehaviour
 
     private void StartBounce()
     {
-        // Coste inicio
         if (useFlame && flameCostStart > 0f)
         {
             if (blockBounceIfNoFlame && !HasFlame(flameCostStart))
@@ -351,6 +425,8 @@ public class PlayerBounceAttack : MonoBehaviour
 
         isAiming = false;
         isBouncing = true;
+
+        impactedThisBounce.Clear();
 
         flameSpentThisBounce = 0f;
         remainingDistance = maxDistance;
@@ -469,28 +545,8 @@ public class PlayerBounceAttack : MonoBehaviour
         previewLine.enabled = false;
     }
 
-    // ================== HIT ENEMIGO ==================
-
     private void OnTriggerEnter2D(Collider2D other)
     {
-        if (!isBouncing) return;
-
-        EnemySimple enemy = other.GetComponentInParent<EnemySimple>();
-        if (enemy != null)
-        {
-            Debug.Log("[BounceAttack] HIT ENEMY BY BOUNCE ATTACK");
-            enemy.TakeHit(bounceDamage);
-        }
+        // No se usa. Impacto via CircleCast en FixedUpdate.
     }
-
-    // ================== DEBUG ==================
-
-    // private void OnGUI()
-    // {
-    //     if (!debugOnScreen) return;
-
-    //     GUI.Label(new Rect(12, 12, 520, 22), $"Flame: {flame:0.0}/{maxFlame:0.0}");
-    //     GUI.Label(new Rect(12, 32, 520, 22), $"Spent Total: {flameSpentTotal:0.0} | Spent Bounce: {flameSpentThisBounce:0.0}");
-    //     GUI.Label(new Rect(12, 52, 520, 22), $"Aiming: {isAiming} | Bouncing: {isBouncing} | Invincible: {isInvincible}");
-    // }
 }

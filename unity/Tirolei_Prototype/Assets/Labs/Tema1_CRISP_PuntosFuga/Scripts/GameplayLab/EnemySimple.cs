@@ -2,7 +2,7 @@ using UnityEngine;
 
 [RequireComponent(typeof(Rigidbody2D))]
 [RequireComponent(typeof(Collider2D))]
-public class EnemySimple : MonoBehaviour
+public class EnemySimple : MonoBehaviour, IBounceImpactReceiver
 {
     [Header("Vida")]
     public int maxHealth = 3;
@@ -333,4 +333,10 @@ public class EnemySimple : MonoBehaviour
         if (hp != null)
             hp.TakeDamage(contactDamage);
     }
+
+    public void ReceiveBounceImpact(BounceImpactData impact)
+    {
+        TakeHit(impact.damage);
+    }
+
 }
