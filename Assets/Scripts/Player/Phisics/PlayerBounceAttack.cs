@@ -34,7 +34,7 @@ public class PlayerBounceAttack : MonoBehaviour
     public bool endBounceWhenOutOfFlame = true;
 
     [Header("Debug")]
-    public bool debugFlame = true;
+    public bool debugFlame = false;
     public bool debugOnScreen = true;
 
     [HideInInspector] public float flameSpentTotal = 0f;
@@ -44,26 +44,23 @@ public class PlayerBounceAttack : MonoBehaviour
     public bool invincibleDuringBounce = true;
     [HideInInspector] public bool isInvincible = false;
 
-    [Header("Colisión de rebote (capas que quieres 'golpear' con el CircleCast)")]
-    [Tooltip("Aquí normalmente van suelo/pared + enemigos/rompibles si quieres impactarlos con el cast.")]
+    [Header("Colisión (cast)")]
+    [Tooltip("Capas que quieres 'golpear' con el CircleCast durante bounce + preview (suelo/pared, enemigos, rompibles...).")]
     public LayerMask bounceLayers;
 
     [Header("Mundo sólido (solo suelo/pared). NO enemigos.")]
-    [Tooltip("Esto se usa SOLO para evitar atravesar suelo/pared en el 'post-pierce'. Debe ser SOLO ground/walls.")]
+    [Tooltip("Esto se usa SOLO para evitar meterte en sólidos al hacer post-pierce. Debe ser SOLO ground/walls.")]
     public LayerMask worldSolidLayers;
 
+    [Tooltip("Skin para evitar stuck / casts a 0.")]
     public float skin = 0.02f;
 
     [Header("Evitar bloqueo por colisión con Enemy/Hazard durante Aim/Bounce")]
-    [Tooltip("Marca aquí la layer Enemy (collider sólido del enemigo).")]
     public LayerMask enemyLayers;
-    [Tooltip("Marca aquí la layer Hazard si tu hitbox/hazard te molesta durante Aim/Bounce.")]
     public LayerMask hazardLayers;
 
     public bool ignoreEnemyCollisionWhileAiming = true;
     public bool ignoreEnemyCollisionWhileBouncing = true;
-
-    [Tooltip("Si true, también ignoramos Hazard durante Aim/Bounce (si tu Hitbox está en Hazard y molesta).")]
     public bool ignoreHazardDuringAimBounce = true;
 
     private Collider2D playerCol;
@@ -75,24 +72,46 @@ public class PlayerBounceAttack : MonoBehaviour
     [Header("Daño")]
     public int bounceDamage = 20;
 
+    [Header("Preview: pierce prediction")]
+    [Tooltip("Si es true, la preview intenta predecir si un bloque se rompe con 1 golpe (HP <= bounceDamage).")]
+    public bool previewPredictPierceUsingWorldMaterialHP = true;
+
+    [Tooltip("Si no se puede predecir (no hay WorldMaterial), qué hacemos en preview: true=asumir pierce, false=asumir rebote.")]
+    public bool previewAssumePierceWhenUnknown = true;
+
+
     [Header("Preview trayectoria")]
     public LineRenderer previewLine;
-    public int previewSegments = 30;
-    public int previewMaxBounces = 5;
+    [Min(2)] public int previewSegments = 30;
+    [Min(0)] public int previewMaxBounces = 5;
+
+    [Header("Aim Snapping (solo + y X)")]
+    public bool snapAimTo8Dirs = true;
+
+    [Tooltip("Si el input está cerca de 0, mantenemos la última dirección válida.")]
+    [Range(0.01f, 0.6f)] public float aimInputDeadzone = 0.20f;
+
+    [Tooltip("Anti-drift: si un eje es muy pequeño, se anula (evita diagonales raras por drift del stick).")]
+    [Range(0f, 0.25f)] public float driftCancel = 0.08f;
+
+    [Header("Preview: visual")]
     public Color previewColor = Color.cyan;
 
-    [Header("Suavizado fin de trayecto")]
-    [Range(0f, 1f)] public float slowDownFraction = 0.3f;
-    [Range(0.05f, 1f)] public float minStepFactor = 0.2f;
+    [Header("Rebote: corrección de normal (anti diagonales raras)")]
+    [Range(0.5f, 0.99f)]
+    public float normalSnapThreshold = 0.85f; // si |ny| > esto, tratamos como suelo/techo
+
+
+    [Tooltip("Longitud visual de la preview (no afecta al ataque real). Si 0, usa maxDistance.")]
+    public float previewDistance = 0f;
+
+    [Header("Suavizado fin de trayecto (REAL bounce)")]
+    [Range(0f, 1f)] public float slowDownFraction = 0.30f;
+    [Range(0.05f, 1f)] public float minStepFactor = 0.20f;
 
     [Header("Pierce: avance seguro post-impacto")]
-    [Tooltip("Distancia mínima para separarte del collider tras romperlo.")]
     public float pierceSeparationMin = 0.06f;
-
-    [Tooltip("Multiplica el radio para calcular avance post-pierce (antes se hacía a ciegas).")]
     public float pierceSeparationRadiusFactor = 0.7f;
-
-    [Tooltip("Máximo avance post-pierce para evitar empujones absurdos si el collider es grande.")]
     public float pierceSeparationMax = 0.25f;
 
     private Rigidbody2D rb;
@@ -104,19 +123,15 @@ public class PlayerBounceAttack : MonoBehaviour
     private bool isAiming = false;
     private bool isBouncing = false;
 
-    private Vector2 aimDirection = Vector2.right;
-    private Vector2 bounceDir = Vector2.right;
-    private Vector2 lastPreviewDir = Vector2.right;
-
+    private Vector2 lastAimDir = Vector2.right; // dirección “bloqueada” (8 dirs)
     private float remainingDistance = 0f;
     private float fixedStepSize = 0f;
     private float ballRadius = 0f;
 
     private Vector2 aimStartPosition;
 
-    // Sólidos NO-pierce: evita spamear impactos infinitos
+    // Para evitar multi-hits / loops
     private readonly HashSet<Collider2D> impactedThisBounce = new HashSet<Collider2D>();
-    // Pierce: evita multi-hit dentro del mismo bounce, pero sigue atravesando
     private readonly HashSet<Collider2D> piercedThisBounce = new HashSet<Collider2D>();
 
     public bool IsAiming => isAiming;
@@ -133,60 +148,53 @@ public class PlayerBounceAttack : MonoBehaviour
         phys = GetComponent<PlayerPhysicsStateController>();
         spark = GetComponent<PlayerSparkBoost>();
 
-        if (phys == null) Debug.LogError("[PlayerBounceAttack] Falta PlayerPhysicsStateController en el Player.");
-        if (circle == null) Debug.LogError("[PlayerBounceAttack] Falta CircleCollider2D.");
-
         playerCol = GetComponent<Collider2D>();
         playerLayer = gameObject.layer;
 
-        ballRadius = circle.radius * Mathf.Max(transform.lossyScale.x, transform.lossyScale.y);
+        if (circle == null) Debug.LogError("[PlayerBounceAttack] Falta CircleCollider2D.");
+        if (phys == null) Debug.LogError("[PlayerBounceAttack] Falta PlayerPhysicsStateController en el Player.");
 
+        ballRadius = circle.radius * Mathf.Max(transform.lossyScale.x, transform.lossyScale.y);
         fixedStepSize = maxDistance / Mathf.Max(1, previewSegments);
+
         ConfigurePreview();
 
         CacheLayerIds(enemyLayers, enemyLayerIds);
         CacheLayerIds(hazardLayers, hazardLayerIds);
     }
 
+    private void CacheLayerIds(LayerMask mask, List<int> outList)
+    {
+        outList.Clear();
+        for (int i = 0; i < 32; i++)
+            if (((mask.value >> i) & 1) == 1)
+                outList.Add(i);
+    }
+
     /// <summary>
     /// CORTE DURO: se llama desde SparkBoost cuando el player recoge un Spark.
-    /// Esto elimina cualquier "trayecto pendiente" del bounce y evita que continúe.
+    /// Elimina cualquier trayecto pendiente del bounce y evita que continúe.
     /// </summary>
     public void ForceCancelFromSpark()
     {
-        // Corta de raíz el movimiento pendiente
         remainingDistance = 0f;
 
-        // Mata estados
         if (isAiming) EndAiming();
         if (isBouncing) EndBounce();
 
-        // Por seguridad: limpia todo
         impactedThisBounce.Clear();
         piercedThisBounce.Clear();
 
         SetAimBounceCollisionIgnore(false);
         ClearPreview();
 
-        // Asegura desbloqueo y flags
         movement.movementLocked = false;
         isInvincible = false;
     }
 
-    private void CacheLayerIds(LayerMask mask, List<int> outList)
-    {
-        outList.Clear();
-        for (int i = 0; i < 32; i++)
-        {
-            if (((mask.value >> i) & 1) == 1)
-                outList.Add(i);
-        }
-    }
-
     private void Update()
     {
-        // Si Spark está activo/dashing => bounce fuera INMEDIATO.
-        // Además usamos ForceCancelFromSpark para cortar remainingDistance YA.
+        // Si Spark está activo/dashing => bounce fuera inmediato.
         if (spark != null && (spark.IsSparkActive() || spark.IsDashing()))
         {
             ForceCancelFromSpark();
@@ -202,9 +210,7 @@ public class PlayerBounceAttack : MonoBehaviour
 
         if (!isAiming && !isBouncing && attackDown)
         {
-            if (!CanStartAiming())
-                return;
-
+            if (!CanStartAiming()) return;
             StartAiming();
 
             if (ignoreEnemyCollisionWhileAiming)
@@ -215,12 +221,7 @@ public class PlayerBounceAttack : MonoBehaviour
             HandleAiming();
 
         if (isAiming && attackUp)
-        {
-            if (aimDirection.sqrMagnitude < 0.1f)
-                aimDirection = Vector2.right;
-
             StartBounce();
-        }
 
         if (isBouncing && (jumpDown || attackDown))
             EndBounce();
@@ -246,6 +247,9 @@ public class PlayerBounceAttack : MonoBehaviour
 
         if (!isBouncing) return;
 
+        rb.linearVelocity = Vector2.zero;
+        rb.angularVelocity = 0f;
+
         float baseStep = fixedStepSize;
         float moveDist = baseStep;
 
@@ -261,99 +265,45 @@ public class PlayerBounceAttack : MonoBehaviour
         }
 
         if (moveDist > remainingDistance) moveDist = remainingDistance;
-
         if (moveDist <= 0f)
         {
             EndBounce();
             return;
         }
 
-        Vector2 dir = (bounceDir.sqrMagnitude > 0.001f ? bounceDir : aimDirection).normalized;
+        // MOVIMIENTO REAL: usa exactamente la misma simulación que el preview (mismo cast, mismas reglas)
+        SimStepResult step = SimulateOneStep(
+            rb.position,
+            lastAimDir,
+            moveDist,
+            bounceLayers,
+            piercedThisBounce,
+            isPreview: false,
+            out Vector2 newPos,
+            out Vector2 newDir,
+            out Collider2D hitCol,
+            out bool didBounce,
+            out bool didPierce,
+            out float traveled);
 
-        int safety = 0;
-        const int MAX_INTERNAL_HITS = 24;
+        // Mueve
+        rb.MovePosition(newPos);
 
-        while (moveDist > 0f && remainingDistance > 0f && safety++ < MAX_INTERNAL_HITS)
+        // Consume distancia (lo realmente recorrido)
+        remainingDistance -= traveled;
+        if (useFlame && flameCostPerUnit > 0f && traveled > 0f)
+            SpendFlame(traveled * flameCostPerUnit);
+
+        if (didPierce)
         {
-            Vector2 origin = rb.position;
-
-            if (!TryCircleCastFiltered(origin, ballRadius, dir, moveDist + skin, bounceLayers, out RaycastHit2D hit))
-            {
-                rb.MovePosition(origin + dir * moveDist);
-                remainingDistance -= moveDist;
-
-                if (useFlame && flameCostPerUnit > 0f)
-                    SpendFlame(moveDist * flameCostPerUnit);
-
-                CheckOutOfFlameAndEndIfNeeded();
-                if (!isBouncing) return;
-
-                if (remainingDistance <= 0f)
-                    EndBounce();
-
-                return;
-            }
-
-            float travel = Mathf.Max(0f, hit.distance - skin);
-
-            if (travel > 0f)
-            {
-                rb.MovePosition(origin + dir * travel);
-                remainingDistance -= travel;
-
-                if (useFlame && flameCostPerUnit > 0f)
-                    SpendFlame(travel * flameCostPerUnit);
-            }
-
-            moveDist = Mathf.Max(0f, moveDist - travel);
-
-            bool broke = ApplyPiercingImpact(hit.collider, dir, bounceDamage, out _);
-
-            // Pierce: si rompe, no rebota, sigue recto
-            if (broke)
-            {
-                float desiredPush = Mathf.Max(pierceSeparationMin, ballRadius * pierceSeparationRadiusFactor);
-                desiredPush = Mathf.Min(desiredPush, pierceSeparationMax);
-
-                float pushed = SafeAdvanceWithoutEnteringWorldSolids(dir, desiredPush, hit.collider);
-
-                if (pushed > 0f)
-                {
-                    remainingDistance -= pushed;
-                    moveDist = Mathf.Max(0f, moveDist - pushed);
-
-                    if (useFlame && flameCostPerUnit > 0f)
-                        SpendFlame(pushed * flameCostPerUnit);
-
-                    CheckOutOfFlameAndEndIfNeeded();
-                    if (!isBouncing) return;
-                }
-
-                if (remainingDistance <= 0f)
-                {
-                    EndBounce();
-                    return;
-                }
-
-                if (moveDist <= 0f)
-                    return;
-
-                continue;
-            }
-
-            // Rebote real
-            bounceDir = Vector2.Reflect(dir, hit.normal).normalized;
-
+            // ya se añadió piercedThisBounce dentro de ApplyPiercingImpact
+            // Mantiene dirección
+        }
+        else if (didBounce)
+        {
+            lastAimDir = newDir; // actualiza dir tras rebote (ya cuantizada)
             if (useFlame && flameCostPerBounce > 0f)
                 SpendFlame(flameCostPerBounce);
-
-            CheckOutOfFlameAndEndIfNeeded();
-            if (!isBouncing) return;
-
-            if (remainingDistance <= 0f)
-                EndBounce();
-
-            return;
         }
 
         CheckOutOfFlameAndEndIfNeeded();
@@ -363,30 +313,169 @@ public class PlayerBounceAttack : MonoBehaviour
             EndBounce();
     }
 
-    private bool TryCircleCastFiltered(Vector2 origin, float radius, Vector2 dir, float distance, LayerMask mask, out RaycastHit2D bestHit)
+    // ======================================================================
+    // SIMULACIÓN UNIFICADA (REAL + PREVIEW)
+    // ======================================================================
+
+    private enum SimStepResult
+    {
+        NoHitMoved,
+        HitPierced,
+        HitBounced,
+        HitBlockedNoMove
+    }
+
+    private SimStepResult SimulateOneStep(
+        Vector2 startPos,
+        Vector2 dir,
+        float requestedMove,
+        LayerMask mask,
+        HashSet<Collider2D> previewOrRuntimePierced,
+        bool isPreview,
+        out Vector2 outPos,
+        out Vector2 outDir,
+        out Collider2D outHitCol,
+        out bool didBounce,
+        out bool didPierce,
+        out float traveled)
+    {
+        outPos = startPos;
+        outDir = dir.sqrMagnitude > 0.0001f ? dir.normalized : Vector2.right;
+        outHitCol = null;
+        didBounce = false;
+        didPierce = false;
+        traveled = 0f;
+
+        float castDist = Mathf.Max(0f, requestedMove);
+        if (castDist <= 0f)
+            return SimStepResult.HitBlockedNoMove;
+
+        // Cast
+        if (!TryCircleCastFiltered(startPos, ballRadius, outDir, castDist + skin, mask, previewOrRuntimePierced, out RaycastHit2D hit) || hit.collider == null)
+        {
+            // no hit: avanzamos full
+            outPos = startPos + outDir * castDist;
+            traveled = castDist;
+            return SimStepResult.NoHitMoved;
+        }
+
+        outHitCol = hit.collider;
+
+        // Distancia hasta el contacto “útil”
+        float travelToHit = Mathf.Max(0f, hit.distance - skin);
+
+        // 1) Avanza hasta el hit (si hay espacio)
+        if (travelToHit > 0f)
+        {
+            outPos = startPos + outDir * travelToHit;
+            traveled = travelToHit;
+        }
+        else
+        {
+            outPos = startPos;
+            traveled = 0f;
+        }
+
+        // 2) Contacto inmediato (ground / pegado): resolver de forma determinista
+        bool inContact = (hit.distance <= skin * 1.25f);
+
+        // En PREVIEW no aplicamos daño real; en REAL sí.
+        bool pierceable = IsPierceable(hit.collider);
+
+        if (pierceable)
+        {
+            bool pierced = false;
+
+            if (isPreview)
+            {
+                pierced = PredictPiercePreview(hit.collider, bounceDamage);
+            }
+            else
+            {
+                pierced = ApplyPiercingImpact(hit.collider, outDir, bounceDamage, out _);
+            }
+
+
+            if (pierced)
+            {
+                didPierce = true;
+
+                // Evita loops: marca como “pierced” en ambos modos para que el cast lo ignore después
+                if (previewOrRuntimePierced != null)
+                    previewOrRuntimePierced.Add(hit.collider);
+
+                // Empuje post-pierce (salir del collider)
+                float desiredPush = Mathf.Max(pierceSeparationMin, ballRadius * pierceSeparationRadiusFactor);
+                desiredPush = Mathf.Min(desiredPush, pierceSeparationMax);
+
+                float pushed = isPreview
+                    ? PreviewSafeAdvanceWithoutEnteringWorldSolids(outPos, outDir, desiredPush, hit.collider)
+                    : SafeAdvanceWithoutEnteringWorldSolids(outDir, desiredPush, hit.collider);
+
+                if (pushed < 0.0001f)
+                    pushed = Mathf.Min(desiredPush, pierceSeparationMin);
+
+                outPos = outPos + outDir * pushed;
+                traveled += pushed;
+
+                // Dirección no cambia
+                return SimStepResult.HitPierced;
+            }
+        }
+
+        // 3) Si no pierce: rebote
+        didBounce = true;
+
+        outDir = ComputeBouncedDir(outDir, hit.normal);
+
+
+        // Si estamos pegados (hit.distance ~ 0), NO lo trates como "bloqueado":
+        // empuja fuera y consume un pelín de longitud para que la preview pueda continuar
+        if (inContact && traveled <= 0.0001f)
+        {
+            float pushOut = Mathf.Max(skin * 3f, 0.02f);
+
+            // empuja fuera del suelo
+            outPos = startPos + hit.normal * pushOut;
+
+            // consume algo para evitar loops infinitos en la simulación de preview
+            traveled = pushOut;
+        }
+        else if (inContact)
+        {
+            // caso normal: ya avanzaste algo, pero igual conviene sacar un pelo fuera
+            outPos = outPos + hit.normal * Mathf.Max(skin * 3f, 0.02f);
+        }
+
+        return SimStepResult.HitBounced;
+
+    }
+
+    private bool TryCircleCastFiltered(
+        Vector2 origin,
+        float radius,
+        Vector2 dir,
+        float distance,
+        LayerMask mask,
+        HashSet<Collider2D> ignoreSet,
+        out RaycastHit2D bestHit)
     {
         bestHit = default;
         RaycastHit2D[] hits = Physics2D.CircleCastAll(origin, radius, dir, distance, mask);
 
         float bestDist = float.PositiveInfinity;
-        bool bestIsPierceable = false;
         bool found = false;
 
-        const float TIE_EPS = 0.05f;
-        float zeroReject = Mathf.Max(0.001f, skin * 1.5f);
+        const float TIE_EPS = 0.01f;
 
         for (int i = 0; i < hits.Length; i++)
         {
             var h = hits[i];
             if (!h.collider) continue;
-
             if (h.collider.isTrigger) continue;
             if (playerCol != null && h.collider == playerCol) continue;
-            if (piercedThisBounce.Contains(h.collider)) continue;
 
-            bool isPierceable = (h.collider.GetComponentInParent<IPiercingBounceReceiver>() != null);
-
-
+            if (ignoreSet != null && ignoreSet.Contains(h.collider)) continue;
 
             float d = h.distance;
 
@@ -394,7 +483,6 @@ public class PlayerBounceAttack : MonoBehaviour
             {
                 bestDist = d;
                 bestHit = h;
-                bestIsPierceable = isPierceable;
                 found = true;
                 continue;
             }
@@ -403,23 +491,80 @@ public class PlayerBounceAttack : MonoBehaviour
             {
                 bestDist = d;
                 bestHit = h;
-                bestIsPierceable = isPierceable;
-                continue;
-            }
-
-            if (Mathf.Abs(d - bestDist) <= TIE_EPS)
-            {
-                if (!bestIsPierceable && isPierceable)
-                {
-                    bestDist = d;
-                    bestHit = h;
-                    bestIsPierceable = true;
-                }
             }
         }
 
         return found;
     }
+
+    // ======================================================================
+    // RUNTIME PIERCE + POST-PUSH
+    // ======================================================================
+
+    private bool IsPierceable(Collider2D col)
+    {
+        return col != null && col.GetComponentInParent<IPiercingBounceReceiver>() != null;
+    }
+
+    private bool ApplyPiercingImpact(Collider2D col, Vector2 direction, float incomingDamage, out float remainingDamage)
+    {
+        remainingDamage = incomingDamage;
+        if (col == null) return false;
+
+        // Si ya lo atravesaste en este bounce, ignóralo como sólido
+        if (piercedThisBounce.Contains(col))
+            return true;
+
+        // Evita micro-hits repetidos sobre el mismo collider
+        if (impactedThisBounce.Contains(col))
+            return false;
+
+        var receiverPierce = col.GetComponentInParent<IPiercingBounceReceiver>();
+        if (receiverPierce != null)
+        {
+            impactedThisBounce.Add(col);
+
+            var impact = new BounceImpactData((int)Mathf.Ceil(incomingDamage), direction, gameObject);
+            bool pierced = receiverPierce.ApplyPiercingBounce(impact, incomingDamage, out float rem);
+            remainingDamage = rem;
+
+            if (pierced)
+                piercedThisBounce.Add(col);
+
+            return pierced;
+        }
+
+        // Impacto normal (no pierce)
+        var receiver = col.GetComponentInParent<IBounceImpactReceiver>();
+        if (receiver != null)
+        {
+            receiver.ReceiveBounceImpact(new BounceImpactData(bounceDamage, direction, gameObject));
+            impactedThisBounce.Add(col);
+        }
+
+        remainingDamage = 0f;
+        return false;
+    }
+
+    private bool PredictPiercePreview(Collider2D col, float incomingDamage)
+    {
+        if (!previewPredictPierceUsingWorldMaterialHP)
+            return previewAssumePierceWhenUnknown;
+
+        if (col == null) return previewAssumePierceWhenUnknown;
+
+        // Caso "ideal": WorldMaterial define HP real
+        WorldMaterial wm = col.GetComponentInParent<WorldMaterial>();
+        if (wm != null)
+        {
+            if (wm.indestructible) return false;
+            return incomingDamage >= wm.structuralHP;
+        }
+
+        // Si no hay WorldMaterial, no podemos saber.
+        return previewAssumePierceWhenUnknown;
+    }
+
 
     private float SafeAdvanceWithoutEnteringWorldSolids(Vector2 dir, float distance, Collider2D ignoreCol)
     {
@@ -429,7 +574,6 @@ public class PlayerBounceAttack : MonoBehaviour
         Vector2 origin = rb.position;
 
         int mask = worldSolidLayers.value;
-
         if (mask == 0)
             mask = (bounceLayers.value & ~enemyLayers.value & ~hazardLayers.value);
 
@@ -462,7 +606,8 @@ public class PlayerBounceAttack : MonoBehaviour
 
         if (allowed > 0f)
         {
-            rb.MovePosition(origin + dir * allowed);
+            // Importante: este método se usa dentro del tick de bounce (ya movimos), así que NO hacemos MovePosition aquí.
+            // Solo devolvemos “cuánto se puede empujar” y el caller ajusta la posición virtual.
             return allowed;
         }
 
@@ -471,76 +616,39 @@ public class PlayerBounceAttack : MonoBehaviour
         {
             RaycastHit2D block = Physics2D.CircleCast(origin, ballRadius, dir, tiny + skin, mask);
             if (!block.collider)
-            {
-                rb.MovePosition(origin + dir * tiny);
                 return tiny;
-            }
         }
 
         return 0f;
     }
 
-    private bool ApplyPiercingImpact(Collider2D col, Vector2 direction, float incomingDamage, out float remainingDamage)
+    private float PreviewSafeAdvanceWithoutEnteringWorldSolids(Vector2 origin, Vector2 dir, float distance, Collider2D ignoreCol)
     {
-        remainingDamage = incomingDamage;
-        if (col == null) return false;
+        if (distance <= 0f) return 0f;
+        dir = dir.sqrMagnitude > 0.0001f ? dir.normalized : Vector2.right;
 
-        // Si ya lo “pierceaste” en este bounce, compórtate como si NO existiera:
-        // Esto evita el bug de “pegado al collider => rebota / comportamientos raros”.
-        if (piercedThisBounce.Contains(col))
-            return true;
+        int mask = worldSolidLayers.value;
+        if (mask == 0) mask = bounceLayers.value;
 
-        // Evita aplicar daño 200 veces por micro-hits en el mismo bounce
-        if (impactedThisBounce.Contains(col))
-            return false;
+        RaycastHit2D[] hits = Physics2D.CircleCastAll(origin, ballRadius, dir, distance + skin, mask);
 
-        var receiverPierce = col.GetComponentInParent<IPiercingBounceReceiver>();
-        if (receiverPierce != null)
+        float allowed = distance;
+        for (int i = 0; i < hits.Length; i++)
         {
-            impactedThisBounce.Add(col);
+            var h = hits[i];
+            if (!h.collider) continue;
+            if (h.collider.isTrigger) continue;
+            if (ignoreCol != null && h.collider == ignoreCol) continue;
 
-            var impact = new BounceImpactData((int)Mathf.Ceil(incomingDamage), direction, gameObject);
-
-            // CLAVE: usa el bool de la interfaz. Eso define si atraviesas o rebotas.
-            bool pierced = receiverPierce.ApplyPiercingBounce(impact, incomingDamage, out float rem);
-            remainingDamage = rem;
-
-            if (pierced)
-                piercedThisBounce.Add(col);
-
-            return pierced; // true => seguir recto; false => rebote normal
+            allowed = Mathf.Min(allowed, Mathf.Max(0f, h.distance - skin));
         }
 
-
-        // Si NO es pierceable, es impacto normal (rebote)
-        var receiver = col.GetComponentInParent<IBounceImpactReceiver>();
-        if (receiver != null)
-        {
-            receiver.ReceiveBounceImpact(new BounceImpactData(bounceDamage, direction, gameObject));
-            impactedThisBounce.Add(col);
-        }
-
-        remainingDamage = 0f;
-        return false;
+        return allowed;
     }
 
-    private bool IsActuallyBrokenNow(Collider2D col)
-    {
-        if (col == null) return true;
-        if (!col.enabled) return true;
-        if (!col.gameObject.activeInHierarchy) return true;
-
-        var wm = col.GetComponentInParent<WorldMaterial>();
-        if (wm != null)
-            return wm.IsBroken;   // <- ESTO ES LO REAL (hp/isBroken)
-
-        return false;
-    }
-
-
-
-
-    // ================== LLAMA ==================
+    // ======================================================================
+    // LLAMA
+    // ======================================================================
 
     private bool HasFlame(float amount) => (!useFlame) || flame >= amount;
 
@@ -565,10 +673,7 @@ public class PlayerBounceAttack : MonoBehaviour
     private bool CanStartAiming()
     {
         if (!useFlame) return true;
-
-        if (flameCostStart > 0f)
-            return flame >= flameCostStart;
-
+        if (flameCostStart > 0f) return flame >= flameCostStart;
         return flame > 0f;
     }
 
@@ -576,18 +681,18 @@ public class PlayerBounceAttack : MonoBehaviour
     {
         if (!useFlame || !endBounceWhenOutOfFlame) return;
         if (flame > 0f) return;
-
         EndBounce();
     }
 
-    // ================== ESTADOS ==================
+    // ======================================================================
+    // ESTADOS AIM / BOUNCE
+    // ======================================================================
 
     private void StartAiming()
     {
         isAiming = true;
 
-        aimDirection = Vector2.right;
-        lastPreviewDir = aimDirection;
+        lastAimDir = Vector2.right;
 
         movement.movementLocked = true;
         aimStartPosition = rb.position;
@@ -602,13 +707,22 @@ public class PlayerBounceAttack : MonoBehaviour
         float y = Input.GetAxisRaw("Vertical");
 
         Vector2 input = new Vector2(x, y);
-        if (input.sqrMagnitude < 0.01f)
-            input = lastPreviewDir;
 
-        input.Normalize();
+        // Deadzone real
+        if (input.sqrMagnitude < (aimInputDeadzone * aimInputDeadzone))
+        {
+            // mantener
+            input = lastAimDir;
+        }
+        else
+        {
+            input.Normalize();
+        }
 
-        aimDirection = input;
-        lastPreviewDir = input;
+        if (snapAimTo8Dirs)
+            input = Quantize8Dirs(input);
+
+        lastAimDir = (input.sqrMagnitude > 0.0001f) ? input : Vector2.right;
 
         UpdatePreview();
     }
@@ -622,7 +736,6 @@ public class PlayerBounceAttack : MonoBehaviour
                 EndAiming();
                 return;
             }
-
             if (!SpendFlame(flameCostStart))
             {
                 EndAiming();
@@ -633,6 +746,11 @@ public class PlayerBounceAttack : MonoBehaviour
         isAiming = false;
         isBouncing = true;
 
+        movement.movementLocked = true;
+
+        rb.linearVelocity = Vector2.zero;
+        rb.angularVelocity = 0f;
+
         impactedThisBounce.Clear();
         piercedThisBounce.Clear();
 
@@ -641,7 +759,8 @@ public class PlayerBounceAttack : MonoBehaviour
 
         ClearPreview();
 
-        bounceDir = lastPreviewDir.sqrMagnitude > 0.001f ? lastPreviewDir.normalized : Vector2.right;
+        lastAimDir = (lastAimDir.sqrMagnitude > 0.0001f) ? lastAimDir.normalized : Vector2.right;
+        if (snapAimTo8Dirs) lastAimDir = Quantize8Dirs(lastAimDir);
 
         if (invincibleDuringBounce)
             isInvincible = true;
@@ -675,7 +794,38 @@ public class PlayerBounceAttack : MonoBehaviour
         OnBounceEnd?.Invoke();
     }
 
-    // ================== PREVIEW ==================
+    // ======================================================================
+    // QUANTIZE (solo 8 dirs: + y X)
+    // ======================================================================
+
+    private Vector2 Quantize8Dirs(Vector2 v)
+    {
+        float x = v.x;
+        float y = v.y;
+
+        // anti drift
+        float d = Mathf.Max(0.001f, driftCancel);
+        if (Mathf.Abs(x) < d) x = 0f;
+        if (Mathf.Abs(y) < d) y = 0f;
+
+        if (Mathf.Abs(x) < 0.0001f && Mathf.Abs(y) < 0.0001f)
+            return Vector2.right;
+
+        // 4 card + 4 diag
+        if (Mathf.Abs(x) < 0.0001f)
+            return (y >= 0f) ? Vector2.up : Vector2.down;
+
+        if (Mathf.Abs(y) < 0.0001f)
+            return (x >= 0f) ? Vector2.right : Vector2.left;
+
+        float sx = (x >= 0f) ? 1f : -1f;
+        float sy = (y >= 0f) ? 1f : -1f;
+        return new Vector2(sx, sy).normalized;
+    }
+
+    // ======================================================================
+    // PREVIEW (usa la MISMA simulación que FixedUpdate)
+    // ======================================================================
 
     private void UpdatePreview()
     {
@@ -685,49 +835,126 @@ public class PlayerBounceAttack : MonoBehaviour
             return;
         }
 
-        Vector2 origin = rb.position;
-        Vector2 dir = lastPreviewDir.sqrMagnitude > 0.001f ? lastPreviewDir.normalized : Vector2.right;
+        Vector2 dir = (lastAimDir.sqrMagnitude > 0.001f) ? lastAimDir.normalized : Vector2.right;
+        if (snapAimTo8Dirs) dir = Quantize8Dirs(dir);
 
-        float remaining = maxDistance;
-        int bounceCount = 0;
+        float previewLen = (previewDistance > 0.01f) ? previewDistance : maxDistance;
+        float remaining = previewLen;
 
-        List<Vector3> points = new List<Vector3> { origin };
-        int maxPoints = Mathf.Max(2, previewSegments + 1);
+        float stepDist = fixedStepSize;
+        if (stepDist <= 0f) stepDist = previewLen / Mathf.Max(1, previewSegments);
 
-        while (remaining > 0f && points.Count < maxPoints && bounceCount <= previewMaxBounces)
+        // Conjunto “pierced” del preview para evitar loops
+        HashSet<Collider2D> previewPierced = new HashSet<Collider2D>();
+
+        List<Vector3> points = new List<Vector3>(previewSegments + 2);
+        Vector2 pos = rb.position;
+        points.Add(pos);
+
+        int bounces = 0;
+        int safety = 0;
+        const int MAX_ITERS = 512;
+
+        while (remaining > 0.0001f && bounces <= previewMaxBounces && safety++ < MAX_ITERS)
         {
-            float stepDist = fixedStepSize;
-            if (stepDist <= 0f) break;
+            float move = Mathf.Min(stepDist, remaining);
 
-            RaycastHit2D hit = Physics2D.CircleCast(origin, ballRadius, dir, stepDist + skin, bounceLayers);
+            SimStepResult res = SimulateOneStep(
+                pos,
+                dir,
+                move,
+                bounceLayers,
+                previewPierced,
+                isPreview: true,
+                out Vector2 newPos,
+                out Vector2 newDir,
+                out _,
+                out bool didBounce,
+                out bool didPierce,
+                out float traveled);
 
-            if (hit.collider != null)
+            // Si no se movió nada y está bloqueado, rompe el loop
+            if (traveled <= 0.0001f && res == SimStepResult.HitBlockedNoMove)
             {
-                float travel = Mathf.Max(0f, hit.distance - skin);
-                Vector2 hitPos = origin + dir * travel;
-
-                points.Add(hitPos);
-                remaining -= travel;
-                origin = hitPos;
-
-                dir = Vector2.Reflect(dir, hit.normal).normalized;
-                bounceCount++;
-
-                if (travel <= 0.001f)
-                    origin += dir * 0.01f;
+                // añade un pelín visual para no “desaparecer”
+                Vector2 tiny = pos + dir * Mathf.Min(remaining, Mathf.Max(0.05f, skin * 3f));
+                points.Add(tiny);
+                pos = tiny;
+                remaining = 0f;
+                break;
             }
-            else
+
+            points.Add(newPos);
+
+            remaining -= traveled;
+            pos = newPos;
+
+            if (didPierce)
             {
-                Vector2 nextPos = origin + dir * stepDist;
-                points.Add(nextPos);
-                remaining -= stepDist;
-                origin = nextPos;
+                // dir igual
             }
+            else if (didBounce)
+            {
+                dir = newDir;
+                bounces++;
+            }
+
+            if (remaining <= 0f) break;
         }
 
-        previewLine.positionCount = points.Count;
-        previewLine.SetPositions(points.ToArray());
+        // Si aún queda, extiende recto para longitud exacta
+        if (remaining > 0.0001f)
+        {
+            Vector2 end = pos + dir * remaining;
+            points.Add(end);
+        }
+
+        // Resample fijo para que la línea NO cambie de “larga/corta” por la cantidad de puntos
+        int targetCount = Mathf.Max(2, previewSegments + 1);
+        var sampled = ResamplePolylineFixedCount(points, targetCount, previewLen);
+
+        previewLine.positionCount = sampled.Count;
+        previewLine.SetPositions(sampled.ToArray());
         previewLine.enabled = true;
+    }
+
+    private List<Vector3> ResamplePolylineFixedCount(List<Vector3> src, int targetCount, float totalLength)
+    {
+        List<Vector3> outPts = new List<Vector3>(Mathf.Max(2, targetCount));
+        if (src == null || src.Count == 0) return outPts;
+        if (targetCount < 2) targetCount = 2;
+
+        // Longitudes acumuladas
+        List<float> cum = new List<float>(src.Count);
+        cum.Add(0f);
+
+        float acc = 0f;
+        for (int i = 1; i < src.Count; i++)
+        {
+            acc += Vector3.Distance(src[i - 1], src[i]);
+            cum.Add(acc);
+        }
+
+        float maxLen = Mathf.Max(0.0001f, Mathf.Min(totalLength, acc));
+        float step = maxLen / (targetCount - 1);
+
+        int seg = 0;
+        for (int k = 0; k < targetCount; k++)
+        {
+            float d = Mathf.Min(maxLen, step * k);
+
+            while (seg < cum.Count - 2 && cum[seg + 1] < d)
+                seg++;
+
+            float d0 = cum[seg];
+            float d1 = cum[seg + 1];
+            float t = (d1 <= d0) ? 0f : (d - d0) / (d1 - d0);
+
+            Vector3 p = Vector3.Lerp(src[seg], src[seg + 1], t);
+            outPts.Add(p);
+        }
+
+        return outPts;
     }
 
     private void ClearPreview()
@@ -755,8 +982,9 @@ public class PlayerBounceAttack : MonoBehaviour
         mat.color = previewColor;
         previewLine.material = mat;
 
-        previewLine.startColor = Color.white;
-        previewLine.endColor = Color.white;
+        previewLine.startColor = previewColor;
+        previewLine.endColor = previewColor;
+
         previewLine.sortingLayerName = "Default";
         previewLine.sortingOrder = 100;
 
@@ -764,7 +992,9 @@ public class PlayerBounceAttack : MonoBehaviour
         previewLine.enabled = false;
     }
 
-    // ================== IGNORE COLLISIONS DURING AIM/BOUNCE ==================
+    // ======================================================================
+    // IGNORE COLLISIONS DURING AIM/BOUNCE
+    // ======================================================================
 
     private void SetAimBounceCollisionIgnore(bool ignore)
     {
@@ -780,4 +1010,48 @@ public class PlayerBounceAttack : MonoBehaviour
                 Physics2D.IgnoreLayerCollision(playerLayer, hazardLayerIds[i], ignore);
         }
     }
+
+
+    private Vector2 ComputeBouncedDir(Vector2 incomingDir, Vector2 normal)
+    {
+        incomingDir = (incomingDir.sqrMagnitude > 0.0001f) ? incomingDir.normalized : Vector2.right;
+        normal = (normal.sqrMagnitude > 0.0001f) ? normal.normalized : Vector2.up;
+
+        // Mantén coherencia con tu sistema: decide si el input era cardinal o diagonal
+        Vector2 qIn = Quantize8Dirs(incomingDir);
+
+        bool inputIsCardinal =
+            (Mathf.Abs(qIn.x) < 0.0001f && Mathf.Abs(qIn.y) > 0.0001f) ||   // up/down
+            (Mathf.Abs(qIn.y) < 0.0001f && Mathf.Abs(qIn.x) > 0.0001f);     // left/right
+
+        // Suelo/techo: solo fuerza vertical PERFECTO si el input era cardinal (UP o DOWN)
+        if (Mathf.Abs(normal.y) >= normalSnapThreshold && Mathf.Abs(normal.y) >= Mathf.Abs(normal.x))
+        {
+            if (inputIsCardinal)
+            {
+                if (qIn.y < 0f) return Vector2.up;    // down -> up
+                if (qIn.y > 0f) return Vector2.down;  // up -> down
+            }
+
+            // Si era diagonal, conserva la lógica reflect (y luego cuantiza a 8 dirs)
+            return Quantize8Dirs(Vector2.Reflect(qIn, normal));
+        }
+
+        // Pared: solo fuerza horizontal PERFECTO si el input era cardinal (LEFT o RIGHT)
+        if (Mathf.Abs(normal.x) >= normalSnapThreshold && Mathf.Abs(normal.x) >= Mathf.Abs(normal.y))
+        {
+            if (inputIsCardinal)
+            {
+                if (qIn.x < 0f) return Vector2.right; // left -> right
+                if (qIn.x > 0f) return Vector2.left;  // right -> left
+            }
+
+            return Quantize8Dirs(Vector2.Reflect(qIn, normal));
+        }
+
+        // Caso general
+        return Quantize8Dirs(Vector2.Reflect(qIn, normal));
+    }
+
+
 }

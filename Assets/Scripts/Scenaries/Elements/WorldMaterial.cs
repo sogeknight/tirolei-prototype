@@ -72,7 +72,8 @@ public class WorldMaterial : MonoBehaviour, IBounceImpactReceiver, IPiercingBoun
         remainingDamage = incomingDamage - used;
 
         if (debugLogs)
-            Debug.Log($"[WorldMaterial] {name} IN={incomingDamage} USED={used} REM={remainingDamage}");
+            Debug.Log($"[WorldMaterial] {name} IN={incomingDamage:0.0} USED={used:0.0} REM={remainingDamage:0.0} hp={hp:0.0}/{structuralHP:0.0}");
+
 
         if (hp <= 0f)
         {

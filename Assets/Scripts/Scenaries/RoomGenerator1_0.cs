@@ -286,6 +286,10 @@ public class RoomGenerator1_0 : MonoBehaviour
         wm.structuralHP = TierToHP(roomTier);
         wm.indestructible = (roomTier == MaterialTier.MaterialTier_S_Seal);
         wm.debugLogs = debugWorldMaterial;
+
+        // CLAVE: sincroniza hp interno con el nuevo structuralHP
+        wm.ResetHP();
+
     }
 
     /// <summary>
@@ -384,6 +388,10 @@ public class RoomGenerator1_0 : MonoBehaviour
             wm.structuralHP = TierToHP(roomTier);
             wm.indestructible = (roomTier == MaterialTier.MaterialTier_S_Seal);
             wm.debugLogs = debugWorldMaterial;
+
+            // CLAVE: sincroniza hp interno con el nuevo structuralHP
+            wm.ResetHP();
+
 
             tm.ClearAllTiles();
             for (int i = 0; i < cells.Count; i++)

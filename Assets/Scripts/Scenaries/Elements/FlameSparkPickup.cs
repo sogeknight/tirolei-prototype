@@ -134,7 +134,7 @@ public class FlameSparkPickup : MonoBehaviour
     }
 
     // =====================================================
-    // BLOQUEO POR GROUND
+    // BLOQUEO POR GROUND (HYSTERESIS REAL, 2 sentidos)
     // =====================================================
     private void EvaluateBlockedState(bool forceApply)
     {
@@ -153,27 +153,34 @@ public class FlameSparkPickup : MonoBehaviour
 
         if (sensedBlocked)
         {
+            // Estamos detectando ground: acumulamos blockedTimer
             blockedTimer += dt;
             clearTimer = 0f;
 
-            if (!blockedByGround && blockedTimer >= minBlockedTime)
+            // Solo pasamos a "blocked" si lleva bloqueado el tiempo mínimo
+            if (!blockedByGround && blockedTimer >= Mathf.Max(0f, minBlockedTime))
             {
                 blockedByGround = true;
+                blockedTimer = 0f;
                 ApplyBlockedVisualAndUsability(true);
             }
         }
         else
         {
+            // No detecta ground: acumulamos clearTimer
             clearTimer += dt;
             blockedTimer = 0f;
 
-            if (blockedByGround && clearTimer >= minClearTime)
+            // Solo pasamos a "clear/usable" si lleva clear el tiempo mínimo
+            if (blockedByGround && clearTimer >= Mathf.Max(0f, minClearTime))
             {
                 blockedByGround = false;
+                clearTimer = 0f;
                 ApplyBlockedVisualAndUsability(false);
             }
         }
     }
+
 
 
     private bool IsBlockedByGroundNow()
@@ -381,7 +388,10 @@ public class FlameSparkPickup : MonoBehaviour
     private void OnTriggerEnter2D(Collider2D other)
     {
         if (!available) return;
-        if (disableWhileBlockedByGround && blockedByGround) return;
+
+        // Bloqueo duro: si AHORA está bloqueado por ground, no se puede coger (da igual hysteresis)
+        if (disableWhileBlockedByGround && IsBlockedByGroundNow())
+            return;
 
         var rb = other.attachedRigidbody;
         if (rb == null) return;
@@ -393,16 +403,19 @@ public class FlameSparkPickup : MonoBehaviour
 
         holderCol = other;
 
-        // Pasa configuración por-instancia al PlayerSparkBoost
+        // Pasa configuración per-instance
         spark.dashUsesBounceCombat = sparkDashUsesBounceCombat;
         spark.dashCombatDamage = sparkDashCombatDamage;
 
-        spark.ActivateSpark(windowDuration, GetAnchorWorld());
+        Vector2 rawAnchor = GetAnchorWorld();
+        Vector2 safeAnchor = spark.ResolveSafeAnchor(rawAnchor);
+
+        spark.ActivateSpark(windowDuration, safeAnchor);
         Consume(waitForExit: true);
 
-
-        Consume(waitForExit: true);
     }
+
+
 
     private void OnTriggerExit2D(Collider2D other)
     {
@@ -453,6 +466,27 @@ public class FlameSparkPickup : MonoBehaviour
 
         StartRespawn();
     }
+
+
+    public bool IsUsableNow()
+    {
+        if (!available) return false;
+        if (waitingForExit) return false;
+
+        if (col != null && !col.enabled) return false;
+
+        if (disableWhileBlockedByGround)
+        {
+            if (blockedByGround) return false;
+            if (minClearTime > 0f && clearTimer < minClearTime) return false;
+
+            // Si quieres todavía más duro, también puedes exigir:
+            // if (IsBlockedByGroundNow()) return false;
+        }
+
+        return true;
+    }
+
 
     // =====================================================
     // RESPAWN

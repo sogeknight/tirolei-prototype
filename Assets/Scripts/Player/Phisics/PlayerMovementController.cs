@@ -29,6 +29,30 @@ public class PlayerMovementController : MonoBehaviour
     public float coyoteTime = 0.1f;       // margen tras dejar el suelo
     public float jumpBufferTime = 0.25f;  // margen desde que pulsas hasta que pisas suelo
 
+    [Header("Pocket Unstuck (huecos pequeños)")]
+    public bool enablePocketUnstuck = true;
+
+    [Tooltip("Caja aproximada para comprobar si estás encajado. (en unidades mundo)")]
+    public Vector2 pocketCheckSize = new Vector2(0.55f, 0.95f);
+
+    [Tooltip("Offset local del check (normalmente un poco hacia abajo para cubrir pies/cuerpo).")]
+    public Vector2 pocketCheckOffset = new Vector2(0f, -0.05f);
+
+    [Tooltip("Tiempo mínimo atascado antes de intentar sacarte, incluso grounded.")]
+    public float pocketStuckTimeToNudge = 0.10f;
+
+    [Tooltip("Paso vertical por intento para salir del hueco.")]
+    public float pocketNudgeUpStep = 0.06f;
+
+    [Tooltip("Máximo de intentos hacia arriba por tick.")]
+    public int pocketMaxUpSteps = 6;
+
+    [Tooltip("Paso lateral si subir no funciona.")]
+    public float pocketNudgeSideStep = 0.06f;
+
+    private float pocketStuckTimer = 0f;
+
+
     [HideInInspector]
     public bool movementLocked = false;
 
@@ -74,6 +98,8 @@ public class PlayerMovementController : MonoBehaviour
     private GameplayTelemetry telemetry;
 
     private const bool DEBUG_MOVEMENT = false;
+
+    
 
     private void Awake()
     {
@@ -150,6 +176,8 @@ public class PlayerMovementController : MonoBehaviour
         {
             stuckTimer = 0f;
         }
+
+        TryPocketUnstuck(pushing, inputX);
 
         // --------------------
         // COYOTE TIME
@@ -330,4 +358,75 @@ public class PlayerMovementController : MonoBehaviour
         Gizmos.DrawWireCube(center, groundProbeSize);
     }
 #endif
+
+    private bool IsPocketBlockedAt(Vector2 pos)
+    {
+        Vector2 center = pos + pocketCheckOffset;
+        // Si toca groundMask dentro de esta caja, consideramos que “está apretado”
+        return Physics2D.OverlapBox(center, pocketCheckSize, 0f, groundMask) != null;
+    }
+
+    private void TryPocketUnstuck(bool pushing, float inputX)
+    {
+        if (!enablePocketUnstuck) return;
+
+        // “Estoy empujando o intentando moverme” + “no me muevo de verdad”
+        bool basicallyNotMoving =
+            Mathf.Abs(rb.linearVelocity.x) < stuckSpeedThreshold &&
+            Mathf.Abs(rb.linearVelocity.y) < 0.20f;
+
+        if (!(pushing && basicallyNotMoving))
+        {
+            pocketStuckTimer = 0f;
+            return;
+        }
+
+        // Si no estás bloqueado “de verdad”, no hagas nada
+        if (!IsPocketBlockedAt(rb.position))
+        {
+            pocketStuckTimer = 0f;
+            return;
+        }
+
+        pocketStuckTimer += Time.deltaTime;
+        if (pocketStuckTimer < pocketStuckTimeToNudge) return;
+        pocketStuckTimer = 0f;
+
+        Vector2 start = rb.position;
+
+        // 1) Intenta salir hacia ARRIBA en varios micro-steps
+        for (int i = 1; i <= pocketMaxUpSteps; i++)
+        {
+            Vector2 test = start + Vector2.up * (pocketNudgeUpStep * i);
+            if (!IsPocketBlockedAt(test))
+            {
+                rb.position = test;
+                // Evita que te “reclave” por velocidad residual hacia abajo
+                var v = rb.linearVelocity;
+                if (v.y < 0f) v.y = 0f;
+                rb.linearVelocity = v;
+                return;
+            }
+        }
+
+        // 2) Si no pudo subir, intenta un micro-lateral hacia el lado que empujas
+        float dir = Mathf.Sign(inputX);
+        if (Mathf.Abs(dir) < 0.1f) dir = 1f;
+
+        Vector2 sideTest = start + Vector2.right * (pocketNudgeSideStep * dir);
+        if (!IsPocketBlockedAt(sideTest))
+        {
+            rb.position = sideTest;
+            return;
+        }
+
+        // 3) Último recurso: lateral contrario
+        sideTest = start + Vector2.right * (pocketNudgeSideStep * -dir);
+        if (!IsPocketBlockedAt(sideTest))
+        {
+            rb.position = sideTest;
+            return;
+        }
+    }
+
 }

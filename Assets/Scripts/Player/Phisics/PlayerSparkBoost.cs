@@ -24,6 +24,7 @@ public class PlayerSparkBoost : MonoBehaviour
     public bool anchorPlayerDuringSpark = true;
     public bool forceOwnRigidbodyState = true;
 
+
     [Header("Anti auto-dash")]
     public bool ignoreInputOnPickupFrame = true;
     [Range(0f, 0.2f)] public float pickupInputBlockTime = 0.06f;
@@ -129,6 +130,23 @@ public class PlayerSparkBoost : MonoBehaviour
     public KeyCode debugClearAllKey = KeyCode.F8;
     public KeyCode debugClearFrozenPreviewKey = KeyCode.F9;
     public KeyCode debugClearFrozenTrailKey = KeyCode.F10;
+
+
+    [Header("Anchor Safety (resolve overlap with solids)")]
+    public bool resolveAnchorIfOverlapping = true;
+
+    [Tooltip("Máscara de sólidos que NO debes solapar al anclar (Ground/Wall). Si lo dejas en 0, usa dashCollisionMask.")]
+    public LayerMask anchorSolidMask;
+
+    [Tooltip("Paso base de búsqueda (en unidades).")]
+    [Range(0.01f, 0.50f)] public float anchorResolveStep = 0.08f;
+
+    [Tooltip("Cuántos 'anillos' de búsqueda alrededor del anchor.")]
+    [Range(1, 20)] public int anchorResolveRings = 10;
+
+    [Tooltip("Bias: intenta primero hacia arriba (útil cuando estás pegado al suelo).")]
+    public bool anchorResolvePreferUp = true;
+
 
     // =========================
     // DEBUG - Dash Trail (TrailRenderer normal - NO permanente)
@@ -590,6 +608,149 @@ public class PlayerSparkBoost : MonoBehaviour
         }
     }
 
+
+        public bool WouldOverlapAt(Vector2 desiredAnchor)
+    {
+        return OverlapsWorldAt(desiredAnchor);
+    }
+
+    public Vector2 ResolveSafeAnchor(Vector2 desiredAnchor)
+    {
+        if (!resolveAnchorIfOverlapping) return desiredAnchor;
+
+        // Si no configuras máscara, usa la del dash
+        LayerMask mask = (anchorSolidMask.value != 0) ? anchorSolidMask : dashCollisionMask;
+
+        // Si ya está limpio, perfecto
+        if (!OverlapsWorldAt(desiredAnchor, mask))
+            return desiredAnchor;
+
+        // Búsqueda en “anillos” con offsets deterministas
+        // Primero probamos “arriba” (si bias), luego cardinales/diagonales.
+        Vector2[] dirsBiasUp = new Vector2[]
+        {
+            Vector2.up,
+            new Vector2(-1, 1).normalized,
+            new Vector2( 1, 1).normalized,
+            Vector2.right,
+            Vector2.left,
+            Vector2.down,
+            new Vector2(-1,-1).normalized,
+            new Vector2( 1,-1).normalized,
+        };
+
+        Vector2[] dirsNoBias = new Vector2[]
+        {
+            Vector2.right, Vector2.left, Vector2.up, Vector2.down,
+            new Vector2( 1, 1).normalized, new Vector2(-1, 1).normalized,
+            new Vector2( 1,-1).normalized, new Vector2(-1,-1).normalized,
+        };
+
+        var dirs = anchorResolvePreferUp ? dirsBiasUp : dirsNoBias;
+
+        float step = Mathf.Max(0.01f, anchorResolveStep);
+
+        for (int ring = 1; ring <= Mathf.Max(1, anchorResolveRings); ring++)
+        {
+            float d = step * ring;
+
+            for (int i = 0; i < dirs.Length; i++)
+            {
+                Vector2 candidate = desiredAnchor + dirs[i] * d;
+                if (!OverlapsWorldAt(candidate, mask))
+                    return candidate;
+            }
+        }
+
+        // Si no encuentra, devuelve el original (pero al menos ya sabes que el problema es geométrico extremo)
+        return desiredAnchor;
+    }
+
+    private bool OverlapsWorldAt(Vector2 anchorPos)
+    {
+        LayerMask mask = (anchorSolidMask.value != 0) ? anchorSolidMask : dashCollisionMask;
+        return OverlapsWorldAt(anchorPos, mask);
+    }
+
+    private bool OverlapsWorldAt(Vector2 anchorPos, LayerMask mask)
+    {
+        // IMPORTANTE: no usar OverlapBox (single) porque puede devolverte TU collider.
+        // Usamos Overlap*All y filtramos self/trigger.
+        const int MAX = 16;
+
+        if (playerCol == null) return false;
+
+        // Usamos el collider real si lo tenemos tipado (en tu script existen boxCol/capsuleCol/circleCol)
+        if (boxCol != null)
+        {
+            Vector2 center = anchorPos + ScaleOffset(boxCol.offset);
+            Vector2 size = ScaleSize(boxCol.size);
+
+            var hits = Physics2D.OverlapBoxAll(center, size, 0f, mask);
+            for (int i = 0; i < hits.Length && i < MAX; i++)
+            {
+                var c = hits[i];
+                if (!c || c == playerCol) continue;
+                if (c.isTrigger) continue;
+                return true;
+            }
+            return false;
+        }
+
+        if (capsuleCol != null)
+        {
+            Vector2 center = anchorPos + ScaleOffset(capsuleCol.offset);
+            Vector2 size = ScaleSize(capsuleCol.size);
+
+            var hits = Physics2D.OverlapCapsuleAll(center, size, capsuleCol.direction, 0f, mask);
+            for (int i = 0; i < hits.Length && i < MAX; i++)
+            {
+                var c = hits[i];
+                if (!c || c == playerCol) continue;
+                if (c.isTrigger) continue;
+                return true;
+            }
+            return false;
+        }
+
+        if (circleCol != null)
+        {
+            Vector2 center = anchorPos + ScaleOffset(circleCol.offset);
+            float r = ScaleRadius(circleCol.radius);
+
+            var hits = Physics2D.OverlapCircleAll(center, r, mask);
+            for (int i = 0; i < hits.Length && i < MAX; i++)
+            {
+                var c = hits[i];
+                if (!c || c == playerCol) continue;
+                if (c.isTrigger) continue;
+                return true;
+            }
+            return false;
+        }
+
+        // Fallback por bounds
+        Bounds b = playerCol.bounds;
+        Vector2 centerFallback = anchorPos + (Vector2)(b.center - (Vector3)rb.position);
+        Vector2 sizeFallback = b.size;
+
+        var hitsFb = Physics2D.OverlapBoxAll(centerFallback, sizeFallback, 0f, mask);
+        for (int i = 0; i < hitsFb.Length && i < MAX; i++)
+        {
+            var c = hitsFb[i];
+            if (!c || c == playerCol) continue;
+            if (c.isTrigger) continue;
+            return true;
+        }
+
+        return false;
+    }
+
+
+
+
+
+
     // =========================
     // Public spark API
     // =========================
@@ -625,8 +786,10 @@ public class PlayerSparkBoost : MonoBehaviour
         isHoldingAim = false;
         holdPauseSpent = 0f;
 
-        sparkAnchorPos = anchorWorldPos;
+        // Resolver anchor: si está pegado a un sólido, lo movemos a un punto "clear"
+        sparkAnchorPos = ResolveSafeAnchor(anchorWorldPos);
         anchorValid = true;
+
 
         pickupFrame = Time.frameCount;
         pickupInputBlockedUntil = Time.time + Mathf.Max(0f, pickupInputBlockTime);
@@ -755,16 +918,9 @@ public class PlayerSparkBoost : MonoBehaviour
 
     private bool PickupUsable(FlameSparkPickup p)
     {
-        if (p == null) return false;
-
-        var pCol = p.GetComponent<Collider2D>();
-        if (pCol != null && !pCol.enabled) return false;
-
-        var pSr = p.GetComponent<SpriteRenderer>();
-        if (pSr != null && !pSr.enabled) return false;
-
-        return true;
+        return p != null && p.IsUsableNow();
     }
+
 
     // (REEMPLAZADA) CON ESCALA REAL
     private bool TryFindPickupAlong(Vector2 originPos, Vector2 dir, float dist, out FlameSparkPickup bestPickup, out float bestDist)
@@ -865,11 +1021,14 @@ public class PlayerSparkBoost : MonoBehaviour
 
                     AbortDashToPickup();
 
-                    Vector2 targetPos = snapToPickupAnchorOnDash
+                    Vector2 rawTargetPos = snapToPickupAnchorOnDash
                         ? anchor
                         : (pos + dir * Mathf.Max(0f, pickupDist - dashSkin));
 
-                    rb.position = targetPos;
+                    Vector2 safeTargetPos = ResolveSafeAnchor(rawTargetPos);
+                    Vector2 safeAnchor = ResolveSafeAnchor(anchor);
+
+                    rb.position = safeTargetPos;
 
                     rb.linearVelocity = Vector2.zero;
                     rb.angularVelocity = 0f;
@@ -882,8 +1041,10 @@ public class PlayerSparkBoost : MonoBehaviour
                     dashUsesBounceCombat = pickup.sparkDashUsesBounceCombat;
                     dashCombatDamage = pickup.sparkDashCombatDamage;
 
-                    ActivateSpark(pickup.windowDuration, anchor);
+                    ActivateSpark(pickup.windowDuration, safeAnchor);
                     return;
+
+
                 }
             }
 
@@ -896,7 +1057,6 @@ public class PlayerSparkBoost : MonoBehaviour
 
             float travel = Mathf.Max(0f, hit.distance - dashSkin);
 
-                ¡¡¡¡¡
 
 
         float movedToHit = Mathf.Min(travel, remaining);
